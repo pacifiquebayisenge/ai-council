@@ -312,6 +312,10 @@ Risicoprofiel: ${profile.riskProfile || "Niet opgegeven"}
 Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
 `.trim();
 
+  // A new user message reopens deliberation with the previous questions as context.
+  if (body.sessionId && question) {
+    database.prepare("UPDATE council_open_questions SET status = 'addressed' WHERE session_id = ? AND status = 'open'").run(finalSessionId);
+  }
   const agentMemories = Object.fromEntries(selectedCouncillors.map((member) => {
     const memories = database.prepare("SELECT memory FROM agent_memories WHERE agent_id = ? ORDER BY created_at DESC LIMIT 5").all(member.id) as { memory: string }[];
     return [member.id, memories.map((row) => row.memory).join("\n")];
