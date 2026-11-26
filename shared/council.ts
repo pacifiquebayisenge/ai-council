@@ -1,11 +1,11 @@
 export const councilModel = "qwen2.5:7b";
 
 export const councilMembers = [
-  { id: "athena", name: "Victor", emoji: "📊", role: "Analyste", model: councilModel },
-  { id: "plutus", name: "Maya", emoji: "🎯", role: "Stratège", model: councilModel },
-  { id: "solon", name: "Sofia", emoji: "🔎", role: "Sceptique", model: councilModel },
-  { id: "vera", name: "Gabriel", emoji: "💬", role: "Empathique", model: councilModel },
+  { id: "athena", name: "Victor", emoji: "📊", role: "Analyst", model: councilModel },
+  { id: "plutus", name: "Maya", emoji: "🎯", role: "Strategist", model: councilModel },
+  { id: "solon", name: "Sofia", emoji: "🔎", role: "Skeptic", model: councilModel },
+  { id: "vera", name: "Gabriel", emoji: "💬", role: "Empath", model: councilModel },
 ];
-export const guestMember = { id: "guest", name: "Invité", emoji: "✨", role: "Perspective supplémentaire" };
-export const chairman = { id: "chairman", name: "Synthèse", role: "Facilitateur" };
+export const guestMember = { id: "guest", name: "Guest", emoji: "✨", role: "Additional perspective" };
+export const chairman = { id: "chairman", name: "Summary", role: "Facilitator" };
 export const councilParticipants = [...councilMembers, guestMember, chairman];
