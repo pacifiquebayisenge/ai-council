@@ -188,19 +188,19 @@ export default defineEventHandler(async (event) => {
     : councillors.map(({ id }) => id);
   const selectedCouncillors = councillors.filter(({ id }) => requestedIds.includes(id));
 
-  if (requestedIds.includes("vera")) {
+  if (requestedIds.includes("guest")) {
     const model = body.guestModel;
     const installedModels = await listOllamaModels().catch(() => {
       throw createError({ statusCode: 503, message: "Ollama is niet bereikbaar." });
     });
-    if (!model || !installedModels.includes(model) || selectedCouncillors.some((member) => member.model === model)) {
-      throw createError({ statusCode: 400, message: "Kies voor Vera een geïnstalleerd model dat nog vrij is." });
+    if (!model || !installedModels.includes(model) || false) {
+      throw createError({ statusCode: 400, message: "Kies een geïnstalleerd model voor de gast." });
     }
     selectedCouncillors.push(guestCouncillor(model));
   }
 
   // Keep at most one model loaded for this council when alternating between models.
-  const keepAlive = selectedCouncillors.length > 1 ? 0 : 300;
+  const keepAlive = 300;
 
   if (!selectedCouncillors.length) {
     throw createError({
@@ -312,6 +312,12 @@ Risicoprofiel: ${profile.riskProfile || "Niet opgegeven"}
 Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
 `.trim();
 
+  const agentMemories = Object.fromEntries(selectedCouncillors.map((member) => {
+    const memories = database.prepare("SELECT memory FROM agent_memories WHERE agent_id = ? ORDER BY created_at DESC LIMIT 5").all(member.id) as { memory: string }[];
+    return [member.id, memories.map((row) => row.memory).join("\n")];
+  }));
+  const unresolved = database.prepare("SELECT question FROM council_open_questions WHERE session_id = ? AND status = 'open' ORDER BY created_at DESC LIMIT 8").all(finalSessionId) as { question: string }[];
+
   const questionId = crypto.randomUUID();
   const questionCreatedAt = new Date().toISOString();
 
@@ -421,6 +427,9 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
                 prompt: `
 ${member.systemPrompt}
 
+Souvenirs personnels de cet agent: ${agentMemories[member.id] || "Aucun"}
+Questions encore ouvertes: ${JSON.stringify(unresolved)}
+
 Persoonlijke context:
 ${profileContext}
 
@@ -443,7 +452,7 @@ Regels:
 - Maximaal twee voordelen en twee risico's.
 - Houd ieder punt kort.
 - Verzin geen actuele wetten, belastingen of marktgegevens.
-- Antwoord uitsluitend in natuurlijk Nederlands.
+- Réponds dans la langue de la question, en français si la question est en français.
 - Geef uitsluitend volledige en geldige JSON terug.
 
 Structuur:
@@ -563,19 +572,22 @@ Structuur:
           const participants = selectedCouncillors.filter((member) =>
             successfulRoundOne.some((answer) => answer.id === member.id),
           );
-          const maxReplies = participants.length === 1 ? 3 : mode === "deep" ? 12 : 7;
+          const maxReplies = participants.length === 1 ? 4 : mode === "deep" ? 20 : 10;
           const debateFocus = [
             "Maak een concrete use case scherp: wie doet wat, onder welke beperkingen, en wat gebeurt er stap voor stap? Toets een standpunt op die use case.",
             "Test een eerder besproken use case onder een veranderde voorwaarde. Beschrijf het verwachte gevolg en wat de andere aanpak beter of slechter zou doen.",
             "Ga terug naar een bezwaar of voorwaarde uit het debat. Maak concreet welk resultaat, meetpunt of grensgeval je van mening zou doen veranderen.",
           ];
           let speaker: (typeof participants)[number] | undefined = participants.find((member) => member.id === "solon") ?? participants[0];
+          const speakCounts = new Map(participants.map((member) => [member.id, 0]));
+          let pendingQuestion = "";
           let replyTarget: CouncilChatMessage | undefined;
           let lastSeenUserMessageId: string | undefined;
 
           for (let turn = 0; speaker && turn < maxReplies; turn++) {
             if (cancelled) return;
             const member: (typeof participants)[number] = speaker;
+            speakCounts.set(member.id, (speakCounts.get(member.id) ?? 0) + 1);
             const others = participants.filter((participant) => participant.id !== member.id);
             emit("debate_status", { id: member.id, status: "reading" });
             await delay(400);
@@ -604,7 +616,7 @@ Structuur:
 ${member.systemPrompt}
 
 Vraag: ${question}
-Eerdere context: ${previousContext.slice(-4000)}
+Eerdere context: ${previousContext.slice(-4000)}\nSouvenirs: ${agentMemories[member.id] || "Aucun"}\nQuestions ouvertes: ${JSON.stringify(unresolved)}
 Andere deelnemers: ${JSON.stringify(others.map(({ id, name }) => ({ id, name })))}
 
 Gesprek tot nu toe:
@@ -626,6 +638,7 @@ Leg uit wat je behoudt of herziet en waarom. Herhaal geen al afgehandeld argumen
 ${turn < maxReplies - 1
   ? "Stel eventueel één gerichte vervolgvraag over een beslissing, aanname of grensgeval. Zet de vraag alleen in followUpQuestion en zet het ID van degene die moet antwoorden in addressedTo."
   : "Dit is de laatste repliek. Werk het open punt af en laat followUpQuestion leeg."}
+Si une information personnelle essentielle manque, adresse une question précise à "user". Tu peux ouvrir un sous-sujet pertinent ou contester un interlocuteur, sans attendre un tour prédéfini. N'invente pas de faits. Réponds dans la langue de l'utilisateur.
 Gebruik "user" voor een vraag aan de gebruiker. Bij één raadslid: toets je eigen eerdere redenering en werk het tegenvoorbeeld uit.
 Werk je redenering uit in twee of drie korte alinea's als dat helpt. Geef alleen geldige JSON terug.
 
@@ -672,6 +685,7 @@ Werk je redenering uit in twee of drie korte alinea's als dat helpt. Geef alleen
               };
               chatMessages.push(reply);
               emit("chat_message", reply);
+              if (addressedTo === "user" && reply.followUpQuestion) pendingQuestion = reply.followUpQuestion;
               emit("debate_status", { id: member.id, status: "done" });
               replyTarget = reply;
             } catch (error) {
@@ -684,18 +698,16 @@ Werk je redenering uit in twee of drie korte alinea's als dat helpt. Geef alleen
               replyTarget = undefined;
             }
 
-            const recentSpeakers = chatMessages
-              .filter((entry) => entry.kind === "reply")
-              .slice(-3)
-              .map((entry) => entry.councillorId);
-            const sidelined = recentSpeakers.length === 3
-              ? others.find((other) => !recentSpeakers.includes(other.id))
-              : undefined;
-            const nextSpeaker: (typeof participants)[number] | undefined =
-              others.find((other) => other.id === addresseeId) ?? sidelined ?? others[0] ?? (participants.length === 1 ? member : undefined);
-            // Only the addressed speaker gets the explicit reply prompt.
-            if (replyTarget && addresseeId !== nextSpeaker?.id) replyTarget = undefined;
-            speaker = nextSpeaker;
+            // Event-inspired scheduling: an explicit challenge takes priority;
+            // otherwise choose the least-heard participant, not a fixed rotation.
+            const addressed = participants.find((candidate) => candidate.id === addresseeId);
+            const eligible = participants.filter((candidate) => candidate.id !== member.id);
+            speaker = addressed ?? eligible.sort((a, b) =>
+              (speakCounts.get(a.id) ?? 0) - (speakCounts.get(b.id) ?? 0)
+            )[0] ?? (participants.length === 1 ? member : undefined);
+            if (replyTarget && replyTarget.replyTo[0] !== speaker?.id) replyTarget = undefined;
+            // Pause at a meaningful question rather than manufacturing a conclusion.
+            if (pendingQuestion && turn >= Math.min(5, maxReplies - 1)) break;
           }
 
           if (cancelled) return;
@@ -705,10 +717,21 @@ Werk je redenering uit in twee of drie korte alinea's als dat helpt. Geef alleen
             throw new Error("Geen raadslid kon antwoorden. Controleer of Ollama draait en het model beschikbaar is.");
           }
 
+          for (const member of participants) {
+            const contributions = chatMessages.filter((entry) => entry.councillorId === member.id);
+            if (!contributions.length) continue;
+            const memory = contributions.slice(-3).map((entry) => entry.message.slice(0, 500)).join(" | ");
+            database.prepare("INSERT INTO agent_memories (id, agent_id, session_id, memory, created_at) VALUES (?, ?, ?, ?, ?)")
+              .run(crypto.randomUUID(), member.id, finalSessionId, memory, new Date().toISOString());
+          }
+          if (pendingQuestion) {
+            database.prepare("INSERT INTO council_open_questions (id, session_id, question, status, created_at) VALUES (?, ?, ?, 'open', ?)")
+              .run(crypto.randomUUID(), finalSessionId, pendingQuestion, new Date().toISOString());
+          }
           let conclusion: ChairmanConclusion | null = null;
 
           const chairmanModel = participants.find(({ model }) => model === councilModel) ?? participants[0];
-          if (chairmanModel) {
+          if (chairmanModel && !pendingQuestion) {
             emit("chairman_status", {
               status: "reading" satisfies ActivityStatus,
             });
@@ -836,7 +859,7 @@ Structuur:
           }
 
           if (cancelled) return;
-          const councilResponse = {
+          const councilResponse = {\n            openQuestion: pendingQuestion || null,
             id: crypto.randomUUID(),
             sessionId: finalSessionId,
             createdAt: new Date().toISOString(),
