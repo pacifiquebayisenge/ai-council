@@ -9,6 +9,7 @@ interface ChatMessage {
   message: string;
   replyTo: string[];
   recommendation?: string;
+  followUpQuestion?: string;
   position?: "defend" | "revise" | "clarify" | "challenge";
 }
 
@@ -24,7 +25,7 @@ const transcript = ref<ChatMessage[]>([]);
 const conclusions = ref<Record<string, Conclusion>>({});
 const draft = ref("");
 const sessionId = ref<string>();
-const mode = ref<"quick" | "deep">("quick");
+const mode = ref<"quick" | "deep">("deep");
 const selectedIds = ref(councilMembers.map(({ id }) => id));
 const running = ref(false);
 const sending = ref(false);
@@ -341,6 +342,7 @@ function addressee(entry: ChatMessage) {
               <span v-if="entry.position === 'revise'" class="revision">Herziet standpunt</span>
             </header>
             <p>{{ entry.message }}</p>
+            <p v-if="entry.followUpQuestion" class="follow-up">{{ entry.followUpQuestion }}</p>
             <p v-if="entry.recommendation && entry.recommendation !== entry.message" class="recommendation">{{ entry.recommendation }}</p>
             <details v-if="conclusions[entry.id]" class="reasoning">
               <summary>Onderbouwing en open punten</summary>
@@ -541,6 +543,7 @@ button:disabled { cursor: default; opacity: .45; }
 .avatar[data-member="plutus"] { background: #eee7dc; color: #665139; }
 .avatar[data-member="solon"] { background: #ebe6ef; color: #5a4765; }
 .chairman .content { padding: 12px 15px; background: #edf2ed; border-radius: 10px; }
+.follow-up { border-left: 2px solid #abc1ad; padding-left: 10px; color: #365244; }
 .recommendation { font-weight: 600; }
 .reasoning { margin-top: 12px; color: #494c45; font-size: .88rem; }
 .reasoning div { margin-top: 10px; }

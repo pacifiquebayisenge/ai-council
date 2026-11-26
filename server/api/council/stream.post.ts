@@ -63,6 +63,7 @@ interface CouncilChatMessage {
   replyTo: string[];
   message: string;
   recommendation?: string;
+  followUpQuestion?: string;
   position?: DebateReply["position"];
   confidence?: number;
   createdAt: string;
@@ -73,6 +74,7 @@ interface DebateReply {
   position: "defend" | "revise" | "clarify" | "challenge";
   message: string;
   revisedRecommendation: string;
+  followUpQuestion?: string;
   confidence: number;
 }
 
@@ -179,7 +181,7 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  const mode: CouncilMode = body.mode === "deep" ? "deep" : "quick";
+  const mode: CouncilMode = body.mode === "quick" ? "quick" : "deep";
 
   const requestedIds = body.selectedCouncillorIds?.length
     ? body.selectedCouncillorIds
@@ -431,7 +433,9 @@ ${question}
 Aanvullingen van de gebruiker tijdens deze ronde:
 ${JSON.stringify(chatMessages.filter((entry) => entry.kind === "user").map((entry) => entry.message))}
 
-Geef een onafhankelijke analyse vanuit jouw specialisatie.
+Geef een onafhankelijk standpunt vanuit jouw specialisatie. Koppel het aan één concreet gebruiksgeval uit de vraag.
+Benoem de actor, wat die probeert te doen en waar de keuze in die situatie verschil maakt.
+Als iets ontbreekt, gebruik een expliciete werkhypothese en leg uit wat verandert als ze niet klopt.
 
 Regels:
 - Geen introductie.
@@ -444,7 +448,7 @@ Regels:
 
 Structuur:
 {
-  "summary": "Jouw kernstandpunt in maximaal twee zinnen",
+  "summary": "Jouw standpunt en het concrete voorbeeld waarop het steunt",
   "keyPoints": ["Punt 1", "Punt 2"],
   "advantages": ["Voordeel 1"],
   "risks": ["Risico 1"],
@@ -559,7 +563,12 @@ Structuur:
           const participants = selectedCouncillors.filter((member) =>
             successfulRoundOne.some((answer) => answer.id === member.id),
           );
-          const maxReplies = participants.length === 1 ? 1 : mode === "deep" ? 9 : 5;
+          const maxReplies = participants.length === 1 ? 3 : mode === "deep" ? 12 : 7;
+          const debateFocus = [
+            "Maak een concrete use case scherp: wie doet wat, onder welke beperkingen, en wat gebeurt er stap voor stap? Toets een standpunt op die use case.",
+            "Test een eerder besproken use case onder een veranderde voorwaarde. Beschrijf het verwachte gevolg en wat de andere aanpak beter of slechter zou doen.",
+            "Ga terug naar een bezwaar of voorwaarde uit het debat. Maak concreet welk resultaat, meetpunt of grensgeval je van mening zou doen veranderen.",
+          ];
           let speaker: (typeof participants)[number] | undefined = participants.find((member) => member.id === "solon") ?? participants[0];
           let replyTarget: CouncilChatMessage | undefined;
           let lastSeenUserMessageId: string | undefined;
@@ -568,20 +577,24 @@ Structuur:
             if (cancelled) return;
             const member: (typeof participants)[number] = speaker;
             const others = participants.filter((participant) => participant.id !== member.id);
-            const transcript = chatMessages.map((entry) => ({
+            emit("debate_status", { id: member.id, status: "reading" });
+            await delay(400);
+            if (cancelled) return;
+            emit("debate_status", { id: member.id, status: "thinking" });
+
+            const focus = debateFocus[Math.floor(turn * debateFocus.length / maxReplies)];
+            const transcript = chatMessages.map((entry, index) => ({
               speaker: entry.name,
               position: entry.position,
-              message: entry.message,
+              message: entry.kind === "reply" && index < chatMessages.length - 6
+                ? entry.message.slice(0, 450)
+                : entry.message,
+              question: entry.followUpQuestion,
               recommendation: entry.recommendation,
             }));
             const latestUser = chatMessages.findLast((entry) => entry.kind === "user");
             const newUserMessage = latestUser?.id !== lastSeenUserMessageId ? latestUser : undefined;
             lastSeenUserMessageId = latestUser?.id;
-
-            emit("debate_status", { id: member.id, status: "reading" });
-            await delay(400);
-            if (cancelled) return;
-            emit("debate_status", { id: member.id, status: "thinking" });
 
             let addresseeId: string | undefined;
             try {
@@ -591,34 +604,41 @@ Structuur:
 ${member.systemPrompt}
 
 Vraag: ${question}
-Eerdere context: ${previousContext}
+Eerdere context: ${previousContext.slice(-4000)}
 Andere deelnemers: ${JSON.stringify(others.map(({ id, name }) => ({ id, name })))}
 
 Gesprek tot nu toe:
 ${JSON.stringify(transcript)}
 
 ${replyTarget
-  ? `Reageer rechtstreeks op dit bericht van ${replyTarget.name}: ${JSON.stringify(replyTarget.message)}`
+  ? `Reageer rechtstreeks op dit bericht van ${replyTarget.name}: ${JSON.stringify(replyTarget.message)}
+${replyTarget.followUpQuestion ? `Beantwoord deze open vraag eerst expliciet: ${JSON.stringify(replyTarget.followUpQuestion)}` : "Beantwoord het concrete bezwaar voordat je verdergaat."}`
   : "Kies een concreet argument dat nog onvoldoende is onderbouwd en spreek de auteur bij naam aan."}
 ${newUserMessage ? `Betrek ook deze nieuwe bijdrage van de gebruiker in je reactie: ${JSON.stringify(newUserMessage.message)}` : ""}
 
-Voer een debat. Citeer kort of parafraseer het argument waarop je reageert.
-Vraag om een specifieke onderbouwing, geef een tegenvoorbeeld, of bevraag een aanname.
-Als iemand jouw standpunt betwist, beantwoord die kritiek: verdedig je standpunt met redenen, verduidelijk het of herzie precies het deel dat niet meer klopt.
-Leg uit wat je overtuigde als je van mening verandert. Draag iets nieuws bij en herhaal de vorige berichten niet.
-Als je een vraag aan iemand stelt, geef diens ID als addressedTo, zodat die persoon gericht kan antwoorden.
-Gebruik "user" wanneer je je bijdrage aan de gebruiker richt. Als je alleen bent, werk dan met de tegenwerping van de gebruiker of toets een eigen aanname.
-Schrijf maximaal 120 woorden en geef alleen geldige JSON terug.
+Focus voor deze bijdrage: ${focus}
+
+Schrijf een natuurlijke repliek aan de betrokken persoon. Grijp terug op een specifieke uitspraak.
+Gebruik een concreet voorbeeld met gevolgen of maak het verschil tussen twee aanpakken tastbaar.
+Gebruik cijfers alleen als de gebruiker die gaf of als je duidelijk zegt dat het voorbeeldwaarden zijn.
+Vermijd algemene termen zoals schaalbaarheid, frictie of complexiteit zonder te beschrijven wat er concreet verandert.
+Leg uit wat je behoudt of herziet en waarom. Herhaal geen al afgehandeld argument.
+${turn < maxReplies - 1
+  ? "Stel eventueel één gerichte vervolgvraag over een beslissing, aanname of grensgeval. Zet de vraag alleen in followUpQuestion en zet het ID van degene die moet antwoorden in addressedTo."
+  : "Dit is de laatste repliek. Werk het open punt af en laat followUpQuestion leeg."}
+Gebruik "user" voor een vraag aan de gebruiker. Bij één raadslid: toets je eigen eerdere redenering en werk het tegenvoorbeeld uit.
+Werk je redenering uit in twee of drie korte alinea's als dat helpt. Geef alleen geldige JSON terug.
 
 {
   "addressedTo": "ID van degene die moet antwoorden, of user",
   "position": "defend, revise, clarify of challenge",
-  "message": "Directe reactie, met eventueel één concrete vraag",
+  "message": "Directe, uitgewerkte reactie met het concrete voorbeeld",
+  "followUpQuestion": "Eén gerichte vervolgvraag, of leeg",
   "revisedRecommendation": "Nieuwe aanbeveling, of leeg als die hetzelfde blijft",
   "confidence": 75
 }
 `,
-                options: { ...member.options, temperature: 0.5, num_predict: 650 },
+                options: { ...member.options, temperature: 0.5, num_predict: mode === "deep" ? 1400 : 950 },
                 keep_alive: keepAlive,
               }, request.signal, () => emit("debate_status", { id: member.id, status: "typing" }));
 
@@ -642,6 +662,9 @@ Schrijf maximaal 120 woorden en geef alleen geldige JSON terug.
                 kind: "reply",
                 replyTo: addressedTo ? [addressedTo] : [],
                 message,
+                followUpQuestion: turn < maxReplies - 1 && addressedTo && typeof parsed.followUpQuestion === "string"
+                  ? parsed.followUpQuestion.trim() || undefined
+                  : undefined,
                 position,
                 recommendation: position === "revise" ? parsed.revisedRecommendation?.trim() : undefined,
                 confidence: clampConfidence(parsed.confidence),
@@ -669,7 +692,7 @@ Schrijf maximaal 120 woorden en geef alleen geldige JSON terug.
               ? others.find((other) => !recentSpeakers.includes(other.id))
               : undefined;
             const nextSpeaker: (typeof participants)[number] | undefined =
-              others.find((other) => other.id === addresseeId) ?? sidelined ?? others[0];
+              others.find((other) => other.id === addresseeId) ?? sidelined ?? others[0] ?? (participants.length === 1 ? member : undefined);
             // Only the addressed speaker gets the explicit reply prompt.
             if (replyTarget && addresseeId !== nextSpeaker?.id) replyTarget = undefined;
             speaker = nextSpeaker;
@@ -721,13 +744,19 @@ ${JSON.stringify(
 )}
 
 Volledige live chat:
-${JSON.stringify(chatMessages, null, 2)}
+${JSON.stringify(chatMessages.map((entry) => ({
+  speaker: entry.name,
+  message: entry.message,
+  recommendation: entry.recommendation,
+  question: entry.followUpQuestion,
+})))}
 
 Formuleer één praktisch eindadvies.
 
 Regels:
 - Gebruik de eerste standpunten, de reacties en de relevante bijdragen van de gebruiker.
 - Benoem concreet wie door welk argument van standpunt veranderde. Beschrijf ook welke bezwaren onbeantwoord bleven.
+- Leg uit welke aanpak past in de uitgewerkte use cases, wat verandert in het wat-als-scenario en welke voorwaarde het advies doet kantelen.
 - Maximaal drie overeenkomsten.
 - Maximaal drie meningsverschillen.
 - Maximaal vier volgende stappen.
@@ -752,7 +781,7 @@ Structuur:
                   top_k: 25,
                   repeat_penalty: 1.15,
                   num_ctx: 8192,
-                  num_predict: mode === "deep" ? 1250 : 900,
+                  num_predict: mode === "deep" ? 1550 : 1100,
                 },
                 keep_alive: keepAlive,
               }, request.signal, () => emit("chairman_status", { status: "typing" }));
