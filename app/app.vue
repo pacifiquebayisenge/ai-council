@@ -31,13 +31,13 @@ const running = ref(false);
 const sending = ref(false);
 const accepting = ref(false);
 const activityLabels = {
-  waiting: "Luistert",
-  reading: "Leest mee",
-  thinking: "Denkt na",
-  typing: "Schrijft",
-  speaking: "Plaatst bericht",
-  done: "Luistert",
-  error: "Geen antwoord",
+  waiting: "Listening",
+  reading: "Reading",
+  thinking: "Thinking",
+  typing: "Writing",
+  speaking: "Speaking",
+  done: "Listening",
+  error: "No response",
 };
 type Activity = keyof typeof activityLabels;
 const activity = ref<Record<string, Activity>>({});
@@ -46,7 +46,7 @@ const guestModel = ref("");
 const modelStatus = ref("");
 const guestModels = computed(() => models.value);
 const participants = computed(() => [
-  { id: "user", name: "Jij", role: "Deelnemer" },
+  { id: "user", name: "You", role: "Participant" },
   ...councilMembers.filter(({ id }) => selectedIds.value.includes(id)),
   ...(selectedIds.value.includes(guestMember.id) ? [{ ...guestMember, model: guestModel.value }] : []),
   chairman,
@@ -55,16 +55,16 @@ const errorMessage = ref("");
 const chat = ref<HTMLElement>();
 const composer = ref<HTMLTextAreaElement>();
 const profile = ref<Record<string, string>>({
-  country: "België",
-  riskProfile: "Gemiddeld",
-  timeHorizon: "Lange termijn",
+  country: "Belgium",
+  riskProfile: "Moderate",
+  timeHorizon: "Long term",
 });
 
 const names = new Map(councilParticipants.map(({ id, name }) => [id, name]));
 const placeholder = computed(() => {
-  if (running.value && accepting.value) return "Meng je in het gesprek…";
-  if (sessionId.value) return "Stel een vervolgvraag…";
-  return "Welke vraag wil je aan de raad voorleggen?";
+  if (running.value && accepting.value) return "Join the discussion…";
+  if (sessionId.value) return "Ask a follow-up question…";
+  return "What would you like to ask the council?";
 });
 
 onMounted(() => {
@@ -82,7 +82,7 @@ async function refreshModels() {
     models.value = (await $fetch("/api/council/models")).models;
     modelStatus.value = "";
   } catch {
-    modelStatus.value = "Ollama is niet bereikbaar.";
+    modelStatus.value = "Ollama is unavailable.";
   }
 }
 
@@ -133,7 +133,7 @@ function handleEvent({ type, payload }: { type: string; payload: any }) {
       accepting.value = true;
       append({
         id: payload.questionId,
-        name: "Jij",
+        name: "You",
         councillorId: "user",
         message: payload.question,
         kind: "user",
@@ -181,7 +181,7 @@ async function submit() {
     } catch (error) {
       draft.value = [text, draft.value].filter(Boolean).join("\n");
       errorMessage.value = (error as { data?: { message?: string } }).data?.message
-        || "Je bericht kon niet worden verstuurd.";
+        || "Your message could not be sent.";
     } finally {
       sending.value = false;
     }
@@ -215,7 +215,7 @@ async function submit() {
     });
     if (!response.ok || !response.body) {
       const details = await response.json().catch(() => null);
-      throw new Error(details?.message || "De raad kon niet starten.");
+      throw new Error(details?.message || "The council could not start.");
     }
 
     const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -228,10 +228,10 @@ async function submit() {
       lines.forEach(consume);
     }
     consume(buffer);
-    if (!finished) throw new Error("De verbinding met de raad werd onderbroken.");
+    if (!finished) throw new Error("The council connection was interrupted.");
   } catch (error) {
     if (!accepted) draft.value = [text, draft.value].filter(Boolean).join("\n");
-    errorMessage.value = error instanceof Error ? error.message : "Er ging iets mis.";
+    errorMessage.value = error instanceof Error ? error.message : "Something went wrong.";
   } finally {
     running.value = false;
     accepting.value = false;
@@ -249,7 +249,7 @@ function onEnter(event: KeyboardEvent) {
 
 function addressee(entry: ChatMessage) {
   const id = entry.replyTo[0];
-  return id === "user" ? "Jij" : id ? names.get(id) : undefined;
+  return id === "user" ? "You" : id ? names.get(id) : undefined;
 }
 </script>
 
@@ -259,17 +259,17 @@ function addressee(entry: ChatMessage) {
       <div class="brand"><span aria-hidden="true">C</span> Conclave</div>
       <div class="actions">
         <details class="settings" @toggle="(event) => { if ((event.currentTarget as HTMLDetailsElement).open) refreshModels(); }">
-          <summary>Instellingen</summary>
+          <summary>Settings</summary>
           <div class="settings-panel">
             <label>
-              Debatlengte
+              Debate length
               <select v-model="mode" :disabled="running">
-                <option value="quick">Kort</option>
-                <option value="deep">Uitgebreid</option>
+                <option value="quick">Quick</option>
+                <option value="deep">In-depth</option>
               </select>
             </label>
             <fieldset :disabled="running">
-              <legend>Raadsleden</legend>
+              <legend>Councillors</legend>
               <label v-for="member in councilMembers" :key="member.id" class="choice">
                 <input
                   type="checkbox"
@@ -281,28 +281,28 @@ function addressee(entry: ChatMessage) {
               </label>
             </fieldset>
             <label class="guest-choice">
-              Vera · Gebruikersstem
+              Guest · Additional perspective
               <select
                 v-model="guestModel"
                 :disabled="running || !guestModels.length || (selectedIds.length === 1 && selectedIds.includes(guestMember.id))"
                 @change="updateGuest"
               >
-                <option value="">Niet aanwezig</option>
+                <option value="">Not present</option>
                 <option v-for="model in guestModels" :key="model" :value="model">{{ model }}</option>
               </select>
             </label>
             <small v-if="modelStatus">{{ modelStatus }}</small>
-            <small v-else-if="!guestModels.length">Een gast kan meedoen zodra Ollama een model beschikbaar heeft.</small>
+            <small v-else-if="!guestModels.length">A guest can join when an Ollama model is available.</small>
           </div>
         </details>
         <button class="quiet" type="button" :disabled="running || sending || !sessionId" @click="newConversation">
-          Nieuw gesprek
+          New conversation
         </button>
       </div>
     </header>
 
     <section class="presence" aria-labelledby="presence-label">
-      <h2 id="presence-label">{{ participants.length }} aanwezig</h2>
+      <h2 id="presence-label">{{ participants.length }} present</h2>
       <ul class="participants" aria-live="polite">
         <li
           v-for="person in participants"
@@ -316,17 +316,17 @@ function addressee(entry: ChatMessage) {
             <span class="participant-role">{{ person.role }}<template v-if="'model' in person"> · {{ person.model }}</template></span>
             <span v-if="person.id !== 'user'" class="participant-state">
               <span class="state-indicator" aria-hidden="true"><i /><i /><i /></span>
-              {{ running ? activityLabels[activity[person.id] || "waiting"] : activity[person.id] === "error" ? "Geen antwoord" : "Aanwezig" }}
+              {{ running ? activityLabels[activity[person.id] || "waiting"] : activity[person.id] === "error" ? "No response" : "Present" }}
             </span>
           </div>
         </li>
       </ul>
     </section>
 
-    <div ref="chat" class="timeline" role="log" aria-label="Gesprek met de raad">
+    <div ref="chat" class="timeline" role="log" aria-label="Council discussion">
       <div v-if="!transcript.length" class="welcome">
-        <h1>Wat wil je bespreken?</h1>
-        <p>Leg een vraag voor aan de raad en meng je in het debat wanneer je wilt.</p>
+        <h1>What would you like to discuss?</h1>
+        <p>Ask the council a question and join the debate whenever you like.</p>
       </div>
 
       <div v-else class="thread">
@@ -335,17 +335,17 @@ function addressee(entry: ChatMessage) {
           <div class="content">
             <header class="byline">
               <strong>{{ entry.name }}</strong>
-              <span v-if="entry.kind === 'chairman'">Conclusie</span>
+              <span v-if="entry.kind === 'chairman'">Conclusion</span>
               <span v-else-if="entry.kind === 'reply' && addressee(entry)">→ {{ addressee(entry) }}</span>
-              <span v-if="entry.position === 'revise'" class="revision">Herziet standpunt</span>
+              <span v-if="entry.position === 'revise'" class="revision">Revised position</span>
             </header>
             <p>{{ entry.message }}</p>
             <p v-if="entry.followUpQuestion" class="follow-up">{{ entry.followUpQuestion }}</p>
             <p v-if="entry.recommendation && entry.recommendation !== entry.message" class="recommendation">{{ entry.recommendation }}</p>
             <details v-if="conclusions[entry.id]" class="reasoning">
-              <summary>Onderbouwing en open punten</summary>
+              <summary>Reasoning and open questions</summary>
               <p v-if="conclusions[entry.id]?.reasoning">{{ conclusions[entry.id]?.reasoning }}</p>
-              <template v-for="(label, key) in { consensus: 'Overeenkomsten', disagreements: 'Open meningsverschillen', nextSteps: 'Volgende stappen' }" :key="key">
+              <template v-for="(label, key) in { consensus: 'Agreements', disagreements: 'Unresolved disagreements', nextSteps: 'Next steps' }" :key="key">
                 <div v-if="conclusions[entry.id]?.[key]?.length">
                   <strong>{{ label }}</strong>
                   <ul>
@@ -363,14 +363,14 @@ function addressee(entry: ChatMessage) {
     <footer class="composer-shell">
       <form class="composer" @submit.prevent="submit">
         <div v-if="running" class="activity" role="status">
-          {{ accepting ? "Je kunt nu tussenkomen." : sessionId ? "Je kunt zo een vervolgvraag sturen." : "De raad komt samen…" }}
+          {{ accepting ? "You can join the discussion now." : sessionId ? "You can send a follow-up shortly." : "The council is gathering…" }}
         </div>
         <div class="input-row">
           <textarea
             ref="composer"
             v-model="draft"
             :placeholder="placeholder"
-            aria-label="Bericht aan de raad"
+            aria-label="Message to the council"
             rows="2"
             maxlength="4000"
             @keydown.enter="onEnter"
@@ -378,9 +378,9 @@ function addressee(entry: ChatMessage) {
           <button
             type="submit"
             :disabled="!draft.trim() || sending || (running && !accepting)"
-            :aria-label="sessionId ? 'Verstuur bericht' : 'Start debat'"
+            :aria-label="sessionId ? 'Send message' : 'Start debate'"
           >
-            {{ sending ? "…" : sessionId ? "Verstuur" : "Start debat" }}
+            {{ sending ? "…" : sessionId ? "Send" : "Start debate" }}
           </button>
         </div>
         <p v-if="errorMessage" class="error" role="alert">{{ errorMessage }}</p>
