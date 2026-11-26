@@ -191,7 +191,7 @@ export default defineEventHandler(async (event) => {
   if (requestedIds.includes("guest")) {
     const model = body.guestModel;
     const installedModels = await listOllamaModels().catch(() => {
-      throw createError({ statusCode: 503, message: "Ollama is niet bereikbaar." });
+      throw createError({ statusCode: 503, message: "Ollama is unavailable." });
     });
     if (!model || !installedModels.includes(model) || false) {
       throw createError({ statusCode: 400, message: "Choose an installed model for the guest." });
@@ -217,13 +217,13 @@ export default defineEventHandler(async (event) => {
       .get(sessionId);
 
     if (liveCouncils.has(sessionId)) {
-      throw createError({ statusCode: 409, message: "Deze raad is nog in overleg." });
+      throw createError({ statusCode: 409, message: "This council is still in session." });
     }
 
     if (!existingSession) {
       throw createError({
         statusCode: 404,
-        statusMessage: "Sessie niet gevonden.",
+        statusMessage: "Session not found.",
       });
     }
   } else {
@@ -443,12 +443,12 @@ ${previousContext}
 Nieuwe vraag:
 ${question}
 
-Aanvullingen van de gebruiker tijdens deze ronde:
+User contributions during this round:
 ${JSON.stringify(chatMessages.filter((entry) => entry.kind === "user").map((entry) => entry.message))}
 
 Give an independent position from your specialist perspective. Connect it to one concrete use case from the question.
 Benoem de actor, wat die probeert te doen en waar de keuze in die situatie verschil maakt.
-Als iets ontbreekt, gebruik een expliciete werkhypothese en leg uit wat verandert als ze niet klopt.
+If information is missing, state an explicit working assumption and explain what changes if it is wrong.
 
 Regels:
 - Geen introductie.
@@ -579,7 +579,7 @@ Structuur:
           const maxReplies = participants.length === 1 ? 4 : mode === "deep" ? 20 : 10;
           const debateFocus = [
             "Explore a concrete use case: who does what, under which constraints, and what happens step by step? Test a claim against it.",
-            "Test een eerder besproken use case onder een veranderde voorwaarde. Beschrijf het verwachte gevolg en wat de andere aanpak beter of slechter zou doen.",
+            "Test a previously discussed use case under changed conditions. Describe the expected outcome and why another approach might do better or worse.",
             "Revisit an objection or condition raised in the debate. Explain what outcome, evidence or edge case would change your mind.",
           ];
           let speaker: (typeof participants)[number] | undefined = participants.find((member) => member.id === "solon") ?? participants[0];
@@ -627,12 +627,12 @@ Gesprek tot nu toe:
 ${JSON.stringify(transcript)}
 
 ${replyTarget
-  ? `Reageer rechtstreeks op dit bericht van ${replyTarget.name}: ${JSON.stringify(replyTarget.message)}
-${replyTarget.followUpQuestion ? `Beantwoord deze open vraag eerst expliciet: ${JSON.stringify(replyTarget.followUpQuestion)}` : "Beantwoord het concrete bezwaar voordat je verdergaat."}`
+  ? `Respond directly to this message from ${replyTarget.name}: ${JSON.stringify(replyTarget.message)}
+${replyTarget.followUpQuestion ? `First explicitly answer this open question: ${JSON.stringify(replyTarget.followUpQuestion)}` : "Address the specific objection before je verdergaat."}`
   : "Choose a specific, insufficiently supported argument and address its author by name."}
-${newUserMessage ? `Betrek ook deze nieuwe bijdrage van de gebruiker in je reactie: ${JSON.stringify(newUserMessage.message)}` : ""}
+${newUserMessage ? `Also incorporate this new contribution from the user: ${JSON.stringify(newUserMessage.message)}` : ""}
 
-Focus voor deze bijdrage: ${focus}
+Focus for this contribution: ${focus}
 
 Write a natural reply to the person concerned. Refer to a specific statement.
 Use a concrete example with consequences or make the differences between two approaches tangible.
@@ -647,9 +647,9 @@ Use "user" when asking the user a question. With only one councillor, critically
 Develop your reasoning over two or three short paragraphs when helpful. Return only valid JSON.
 
 {
-  "addressedTo": "ID van degene die moet antwoorden, of user",
+  "addressedTo": "ID of the intended respondent, or user",
   "position": "defend, revise, clarify of challenge",
-  "message": "Directe, uitgewerkte reactie met het concrete voorbeeld",
+  "message": "Direct, detailed response with a concrete example",
   "followUpQuestion": "One precise follow-up question, or empty",
   "revisedRecommendation": "Nieuwe aanbeveling, of leeg als die hetzelfde blijft",
   "confidence": 75
@@ -782,7 +782,7 @@ Formulate one practical final recommendation.
 
 Regels:
 - Use initial positions, debate replies and relevant contributions from the user.
-- Benoem concreet wie door welk argument van standpunt veranderde. Beschrijf ook welke bezwaren onbeantwoord bleven.
+- Identify who changed their position and which argument persuaded them. Describe any unanswered objections.
 - Leg uit welke aanpak past in de uitgewerkte use cases, wat verandert in het wat-als-scenario en welke voorwaarde het advies doet kantelen.
 - Maximaal drie overeenkomsten.
 - Maximaal drie meningsverschillen.
