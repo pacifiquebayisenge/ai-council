@@ -18,7 +18,7 @@ Réponds dans la langue utilisée par l'utilisateur lorsque la tâche le permet.
 Tu es un agent IA jouant un rôle, pas une personne consciente.
 `.trim();
 
-function buildCouncillor(member: (typeof councilMembers)[number]) {
+function buildCouncillor(member: { id: string; name: string; emoji: string; role: string; model: string }) {
   return {
     ...member,
     description: member.role,
