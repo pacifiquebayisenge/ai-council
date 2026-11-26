@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { councilMembers, councilModel } from "#shared/council";
+import { chairman, councilMembers, councilParticipants, guestMember } from "#shared/council";
 
 interface ChatMessage {
   id: string;
@@ -29,7 +29,29 @@ const selectedIds = ref(councilMembers.map(({ id }) => id));
 const running = ref(false);
 const sending = ref(false);
 const accepting = ref(false);
-const speaker = ref("");
+const activityLabels = {
+  waiting: "Luistert",
+  reading: "Leest mee",
+  thinking: "Denkt na",
+  typing: "Schrijft",
+  speaking: "Plaatst bericht",
+  done: "Luistert",
+  error: "Geen antwoord",
+};
+type Activity = keyof typeof activityLabels;
+const activity = ref<Record<string, Activity>>({});
+const models = ref<string[]>([]);
+const guestModel = ref("");
+const modelStatus = ref("");
+const guestModels = computed(() => models.value.filter((model) =>
+  !councilMembers.some((member) => member.model === model && selectedIds.value.includes(member.id)),
+));
+const participants = computed(() => [
+  { id: "user", name: "Jij", role: "Deelnemer" },
+  ...councilMembers.filter(({ id }) => selectedIds.value.includes(id)),
+  ...(selectedIds.value.includes(guestMember.id) ? [{ ...guestMember, model: guestModel.value }] : []),
+  chairman,
+]);
 const errorMessage = ref("");
 const chat = ref<HTMLElement>();
 const composer = ref<HTMLTextAreaElement>();
@@ -39,7 +61,7 @@ const profile = ref<Record<string, string>>({
   timeHorizon: "Lange termijn",
 });
 
-const names = new Map(councilMembers.map(({ id, name }) => [id, name]));
+const names = new Map(councilParticipants.map(({ id, name }) => [id, name]));
 const placeholder = computed(() => {
   if (running.value && accepting.value) return "Meng je in het gesprek…";
   if (sessionId.value) return "Stel een vervolgvraag…";
@@ -47,6 +69,7 @@ const placeholder = computed(() => {
 });
 
 onMounted(() => {
+  void refreshModels();
   try {
     const saved = localStorage.getItem("ai-council-profile");
     if (saved) profile.value = { ...profile.value, ...JSON.parse(saved) };
@@ -55,12 +78,22 @@ onMounted(() => {
   }
 });
 
+async function refreshModels() {
+  try {
+    models.value = (await $fetch("/api/council/models")).models;
+    modelStatus.value = "";
+  } catch {
+    modelStatus.value = "Ollama is niet bereikbaar.";
+  }
+}
+
 function newConversation() {
   sessionId.value = undefined;
   transcript.value = [];
   conclusions.value = {};
   draft.value = "";
   errorMessage.value = "";
+  activity.value = {};
   composer.value?.focus();
 }
 
@@ -71,7 +104,16 @@ function toggleParticipant(id: string) {
     }
   } else {
     selectedIds.value.push(id);
+    if (id !== guestMember.id && !guestModels.value.includes(guestModel.value)) {
+      guestModel.value = "";
+      selectedIds.value = selectedIds.value.filter((selected) => selected !== guestMember.id);
+    }
   }
+}
+
+function updateGuest() {
+  const included = selectedIds.value.includes(guestMember.id);
+  if (Boolean(guestModel.value) !== included) toggleParticipant(guestMember.id);
 }
 
 function append(entry: ChatMessage) {
@@ -102,10 +144,9 @@ function handleEvent({ type, payload }: { type: string; payload: any }) {
     case "member_status":
     case "debate_status":
     case "chairman_status":
-      if (payload.status === "thinking") {
-        speaker.value = type === "chairman_status" ? "Voorzitter" : names.get(payload.id) || "";
+      if (Object.hasOwn(activityLabels, payload.status)) {
+        activity.value[type === "chairman_status" ? chairman.id : payload.id] = payload.status;
       }
-      if (payload.status === "done" || payload.status === "error") speaker.value = "";
       break;
     case "chat_message":
       append(payload);
@@ -117,7 +158,6 @@ function handleEvent({ type, payload }: { type: string; payload: any }) {
     }
     case "interjections_closed":
       accepting.value = false;
-      speaker.value = "Voorzitter";
       break;
     case "chairman_error":
     case "fatal_error":
@@ -150,6 +190,7 @@ async function submit() {
   }
 
   running.value = true;
+  activity.value = {};
   let accepted = false;
   let finished = false;
   function consume(line: string) {
@@ -169,6 +210,7 @@ async function submit() {
         sessionId: sessionId.value,
         mode: mode.value,
         selectedCouncillorIds: selectedIds.value,
+        guestModel: guestModel.value,
         profile: profile.value,
       }),
     });
@@ -194,7 +236,9 @@ async function submit() {
   } finally {
     running.value = false;
     accepting.value = false;
-    speaker.value = "";
+    for (const id of Object.keys(activity.value)) {
+      if (activity.value[id] !== "error") activity.value[id] = "waiting";
+    }
   }
 }
 
@@ -215,7 +259,7 @@ function addressee(entry: ChatMessage) {
     <header class="bar">
       <div class="brand"><span aria-hidden="true">C</span> Conclave</div>
       <div class="actions">
-        <details class="settings">
+        <details class="settings" @toggle="(event) => { if ((event.currentTarget as HTMLDetailsElement).open) refreshModels(); }">
           <summary>Instellingen</summary>
           <div class="settings-panel">
             <label>
@@ -237,7 +281,19 @@ function addressee(entry: ChatMessage) {
                 {{ member.name }}
               </label>
             </fieldset>
-            <small>Ollama · {{ councilModel }}</small>
+            <label class="guest-choice">
+              Vera · Gebruikersstem
+              <select
+                v-model="guestModel"
+                :disabled="running || !guestModels.length || (selectedIds.length === 1 && selectedIds.includes(guestMember.id))"
+                @change="updateGuest"
+              >
+                <option value="">Niet aanwezig</option>
+                <option v-for="model in guestModels" :key="model" :value="model">{{ model }}</option>
+              </select>
+            </label>
+            <small v-if="modelStatus">{{ modelStatus }}</small>
+            <small v-else-if="!guestModels.length">Vera kan meedoen zodra er een vrij Ollama-model is.</small>
           </div>
         </details>
         <button class="quiet" type="button" :disabled="running || sending || !sessionId" @click="newConversation">
@@ -245,6 +301,28 @@ function addressee(entry: ChatMessage) {
         </button>
       </div>
     </header>
+
+    <section class="presence" aria-labelledby="presence-label">
+      <h2 id="presence-label">{{ participants.length }} aanwezig</h2>
+      <ul class="participants" aria-live="polite">
+        <li
+          v-for="person in participants"
+          :key="person.id"
+          class="participant"
+          :data-state="activity[person.id] || 'waiting'"
+        >
+          <span class="avatar" :data-member="person.id" aria-hidden="true">{{ person.name[0] }}</span>
+          <div>
+            <strong>{{ person.name }}</strong>
+            <span class="participant-role">{{ person.role }}<template v-if="'model' in person"> · {{ person.model }}</template></span>
+            <span v-if="person.id !== 'user'" class="participant-state">
+              <span class="state-indicator" aria-hidden="true"><i /><i /><i /></span>
+              {{ running ? activityLabels[activity[person.id] || "waiting"] : activity[person.id] === "error" ? "Geen antwoord" : "Aanwezig" }}
+            </span>
+          </div>
+        </li>
+      </ul>
+    </section>
 
     <div ref="chat" class="timeline" role="log" aria-label="Gesprek met de raad">
       <div v-if="!transcript.length" class="welcome">
@@ -285,8 +363,7 @@ function addressee(entry: ChatMessage) {
     <footer class="composer-shell">
       <form class="composer" @submit.prevent="submit">
         <div v-if="running" class="activity" role="status">
-          {{ speaker ? `${speaker} denkt na…` : "De raad is aan het overleggen…" }}
-          <span v-if="sessionId && !accepting">Je kunt zo een vervolgvraag sturen.</span>
+          {{ accepting ? "Je kunt nu tussenkomen." : sessionId ? "Je kunt zo een vervolgvraag sturen." : "De raad komt samen…" }}
         </div>
         <div class="input-row">
           <textarea
@@ -329,7 +406,7 @@ button:disabled { cursor: default; opacity: .45; }
 
 .council {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   height: 100vh;
   height: 100dvh;
 }
@@ -386,7 +463,58 @@ button:disabled { cursor: default; opacity: .45; }
 .settings-panel fieldset { margin: 14px 0; padding: 0; border: 0; }
 .settings-panel legend { margin-bottom: 6px; }
 .choice { display: flex; align-items: center; gap: .5rem; margin: 4px 0; }
-.settings-panel small { color: #5e5d55; }
+.settings-panel small { display: block; margin-top: 6px; color: #5e5d55; }
+
+.presence {
+  min-width: 0;
+  padding: 12px clamp(16px, 4vw, 48px);
+  border-bottom: 1px solid #e7e4dd;
+  background: #faf9f6;
+}
+.presence h2 { margin: 0 0 8px; font-size: .81rem; font-weight: 650; }
+.participants {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 3px;
+}
+.participant {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid #e7e4dd;
+  border-radius: 11px;
+  background: #fffefa;
+  transition: background 160ms, border-color 160ms;
+}
+.participant strong, .participant-role, .participant-state { display: block; }
+.participant strong { font-size: .85rem; }
+.participant-role, .participant-state { color: #5e5d55; font-size: .72rem; }
+.participant-state { margin-top: 3px; }
+.avatar[data-member="vera"] { background: #f4e6e4; color: #784b47; }
+.participant:is([data-state="reading"], [data-state="thinking"], [data-state="typing"]) {
+  background: #eff4ed;
+  border-color: #abc1ad;
+}
+.participant[data-state="reading"] .avatar { animation: read-nod 950ms ease-in-out infinite; }
+.participant[data-state="typing"] .state-indicator { display: inline-flex; gap: 2px; }
+.state-indicator { display: none; }
+.state-indicator i { width: 4px; height: 4px; background: #365244; border-radius: 50%; animation: typing-dot .9s ease-in-out infinite; }
+.state-indicator i:nth-child(2) { animation-delay: .14s; }
+.state-indicator i:nth-child(3) { animation-delay: .28s; }
+.participant[data-state="thinking"] .avatar { animation: thinking-pulse 1.4s ease-in-out infinite; }
+.participant[data-state="error"] .participant-state { color: #982b2b; }
+@keyframes read-nod { 50% { transform: rotate(-9deg); } }
+@keyframes thinking-pulse { 50% { box-shadow: 0 0 0 4px #c9dace; } }
+@keyframes typing-dot { 50% { transform: translateY(-3px); } }
+@keyframes enter-message { from { opacity: .45; transform: translateY(5px); } }
+@media (prefers-reduced-motion: reduce) {
+  .participant, .participant .avatar, .state-indicator i, .message { animation: none !important; transition: none; }
+}
 
 .timeline { overflow-y: auto; padding: 18px 16px; }
 .welcome {
@@ -399,7 +527,7 @@ button:disabled { cursor: default; opacity: .45; }
 .welcome p { color: #5e5d55; margin: .65rem auto; max-width: 30rem; line-height: 1.55; }
 .thread, .composer { width: min(100%, 760px); margin-inline: auto; }
 
-.message { display: flex; align-items: flex-start; gap: 12px; padding: 16px 0; }
+.message { animation: enter-message 180ms ease-out; display: flex; align-items: flex-start; gap: 12px; padding: 16px 0; }
 .message + .message { border-top: 1px solid #ebe8e0; }
 .content { min-width: 0; flex: 1; }
 .content p, .content li { line-height: 1.55; overflow-wrap: anywhere; }
@@ -424,7 +552,6 @@ button:disabled { cursor: default; opacity: .45; }
   background: #fffefa;
 }
 .activity { padding: 0 0 8px; font-size: .84rem; color: #4d5a50; }
-.activity span { display: inline-block; margin-left: 5px; }
 .input-row { display: flex; gap: 8px; align-items: flex-end; }
 .composer textarea {
   flex: 1;

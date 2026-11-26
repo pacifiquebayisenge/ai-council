@@ -1,6 +1,7 @@
 import { councilModel } from "#shared/council";
 import { liveCouncils } from "../../utils/live-council";
-import { councillors } from "../../data/councillors";
+import { councillors, guestCouncillor } from "../../data/councillors";
+import { generateCouncilReply, listOllamaModels } from "../../utils/council-ollama";
 import database from "../../utils/database";
 
 type CouncilMode = "quick" | "deep";
@@ -26,11 +27,8 @@ interface CouncilRequest {
   sessionId?: string;
   mode?: CouncilMode;
   selectedCouncillorIds?: string[];
+  guestModel?: string;
   profile?: UserProfile;
-}
-
-interface OllamaResponse {
-  response: string;
 }
 
 interface StructuredAdvice {
@@ -183,11 +181,24 @@ export default defineEventHandler(async (event) => {
 
   const mode: CouncilMode = body.mode === "deep" ? "deep" : "quick";
 
-  const selectedCouncillors = body.selectedCouncillorIds?.length
-    ? councillors.filter((member) =>
-        body.selectedCouncillorIds?.includes(member.id),
-      )
-    : councillors;
+  const requestedIds = body.selectedCouncillorIds?.length
+    ? body.selectedCouncillorIds
+    : councillors.map(({ id }) => id);
+  const selectedCouncillors = councillors.filter(({ id }) => requestedIds.includes(id));
+
+  if (requestedIds.includes("vera")) {
+    const model = body.guestModel;
+    const installedModels = await listOllamaModels().catch(() => {
+      throw createError({ statusCode: 503, message: "Ollama is niet bereikbaar." });
+    });
+    if (!model || !installedModels.includes(model) || selectedCouncillors.some((member) => member.model === model)) {
+      throw createError({ statusCode: 400, message: "Kies voor Vera een geïnstalleerd model dat nog vrij is." });
+    }
+    selectedCouncillors.push(guestCouncillor(model));
+  }
+
+  // Keep at most one model loaded for this council when alternating between models.
+  const keepAlive = selectedCouncillors.length > 1 ? 0 : 300;
 
   if (!selectedCouncillors.length) {
     throw createError({
@@ -403,16 +414,9 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
             });
 
             try {
-              const result = await $fetch<OllamaResponse>(
-                "http://localhost:11434/api/generate",
-                {
-                  signal: request.signal,
-                  method: "POST",
-                  body: {
-                    model: member.model,
-                    stream: false,
-                    format: "json",
-                    prompt: `
+              const result = await generateCouncilReply({
+                model: member.model,
+                prompt: `
 ${member.systemPrompt}
 
 Persoonlijke context:
@@ -449,25 +453,16 @@ Structuur:
   "confidence": 75
 }
 `,
-                    options: {
-                      ...member.options,
-                      num_predict: mode === "deep" ? 1400 : 950,
-                    },
-                  },
+                options: {
+                  ...member.options,
+                  num_predict: mode === "deep" ? 1400 : 950,
                 },
-              );
+                keep_alive: keepAlive,
+              }, request.signal, () => emit("member_status", { id: member.id, phase: "analysis", status: "typing" }));
 
               const advice = normalizeAdvice(
-                parseJsonResponse<StructuredAdvice>(result.response),
+                parseJsonResponse<StructuredAdvice>(result),
               );
-
-              emit("member_status", {
-                id: member.id,
-                phase: "analysis",
-                status: "typing" satisfies ActivityStatus,
-              });
-
-              await delay(400);
 
               const openingMessage: CouncilChatMessage = {
                 id: crypto.randomUUID(),
@@ -575,6 +570,7 @@ Structuur:
             const others = participants.filter((participant) => participant.id !== member.id);
             const transcript = chatMessages.map((entry) => ({
               speaker: entry.name,
+              position: entry.position,
               message: entry.message,
               recommendation: entry.recommendation,
             }));
@@ -582,20 +578,16 @@ Structuur:
             const newUserMessage = latestUser?.id !== lastSeenUserMessageId ? latestUser : undefined;
             lastSeenUserMessageId = latestUser?.id;
 
+            emit("debate_status", { id: member.id, status: "reading" });
+            await delay(400);
+            if (cancelled) return;
             emit("debate_status", { id: member.id, status: "thinking" });
 
             let addresseeId: string | undefined;
             try {
-              const result = await $fetch<OllamaResponse>(
-                "http://localhost:11434/api/generate",
-                {
-                  signal: request.signal,
-                  method: "POST",
-                  body: {
-                    model: member.model,
-                    stream: false,
-                    format: "json",
-                    prompt: `
+              const result = await generateCouncilReply({
+                model: member.model,
+                prompt: `
 ${member.systemPrompt}
 
 Vraag: ${question}
@@ -626,12 +618,11 @@ Schrijf maximaal 120 woorden en geef alleen geldige JSON terug.
   "confidence": 75
 }
 `,
-                    options: { ...member.options, temperature: 0.5, num_predict: 650 },
-                  },
-                },
-              );
+                options: { ...member.options, temperature: 0.5, num_predict: 650 },
+                keep_alive: keepAlive,
+              }, request.signal, () => emit("debate_status", { id: member.id, status: "typing" }));
 
-              const parsed = parseJsonResponse<DebateReply>(result.response);
+              const parsed = parseJsonResponse<DebateReply>(result);
               const message = parsed.message?.trim();
               if (!message) throw new Error("Het raadslid gaf geen inhoudelijke reactie.");
               const addressedMember = others.find((other) => other.id === parsed.addressedTo);
@@ -693,7 +684,8 @@ Schrijf maximaal 120 woorden en geef alleen geldige JSON terug.
 
           let conclusion: ChairmanConclusion | null = null;
 
-          if (successfulRoundOne.length) {
+          const chairmanModel = participants.find(({ model }) => model === councilModel) ?? participants[0];
+          if (chairmanModel) {
             emit("chairman_status", {
               status: "reading" satisfies ActivityStatus,
             });
@@ -705,16 +697,9 @@ Schrijf maximaal 120 woorden en geef alleen geldige JSON terug.
             });
 
             try {
-              const chairmanResult = await $fetch<OllamaResponse>(
-                "http://localhost:11434/api/generate",
-                {
-                  signal: request.signal,
-                  method: "POST",
-                  body: {
-                    model: councilModel,
-                    stream: false,
-                    format: "json",
-                    prompt: `
+              const chairmanResult = await generateCouncilReply({
+                model: chairmanModel.model,
+                prompt: `
 Je bent de voorzitter van een persoonlijke AI Council.
 
 Eerdere gesprekscontext:
@@ -761,29 +746,22 @@ Structuur:
   "confidence": 75
 }
 `,
-                    options: {
-                      temperature: 0.2,
-                      top_p: 0.8,
-                      top_k: 25,
-                      repeat_penalty: 1.15,
-                      num_ctx: 8192,
-                      num_predict: mode === "deep" ? 1250 : 900,
-                    },
-                  },
+                options: {
+                  temperature: 0.2,
+                  top_p: 0.8,
+                  top_k: 25,
+                  repeat_penalty: 1.15,
+                  num_ctx: 8192,
+                  num_predict: mode === "deep" ? 1250 : 900,
                 },
-              );
+                keep_alive: keepAlive,
+              }, request.signal, () => emit("chairman_status", { status: "typing" }));
 
               conclusion = normalizeConclusion(
                 parseJsonResponse<ChairmanConclusion>(
-                  chairmanResult.response,
+                  chairmanResult,
                 ),
               );
-
-              emit("chairman_status", {
-                status: "typing" satisfies ActivityStatus,
-              });
-
-              await delay(450);
 
               const chairmanMessage: CouncilChatMessage = {
                 id: crypto.randomUUID(),
