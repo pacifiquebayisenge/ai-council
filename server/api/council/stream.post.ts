@@ -1,7 +1,10 @@
 import { councilModel } from "#shared/council";
 import { liveCouncils } from "../../utils/live-council";
 import { councillors, guestCouncillor } from "../../data/councillors";
-import { generateCouncilReply, listOllamaModels } from "../../utils/council-ollama";
+import {
+  generateCouncilReply,
+  listOllamaModels,
+} from "../../utils/council-ollama";
 import database from "../../utils/database";
 
 type CouncilMode = "quick" | "deep";
@@ -150,9 +153,7 @@ function normalizeAdvice(value: StructuredAdvice): StructuredAdvice {
   };
 }
 
-function normalizeConclusion(
-  value: ChairmanConclusion,
-): ChairmanConclusion {
+function normalizeConclusion(value: ChairmanConclusion): ChairmanConclusion {
   return {
     verdict: value.verdict?.trim() || "Geen besluit beschikbaar.",
     recommendedAction:
@@ -186,7 +187,9 @@ export default defineEventHandler(async (event) => {
   const requestedIds = body.selectedCouncillorIds?.length
     ? body.selectedCouncillorIds
     : councillors.map(({ id }) => id);
-  const selectedCouncillors = councillors.filter(({ id }) => requestedIds.includes(id));
+  const selectedCouncillors = councillors.filter(({ id }) =>
+    requestedIds.includes(id),
+  );
 
   if (requestedIds.includes("guest")) {
     const model = body.guestModel;
@@ -194,7 +197,10 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 503, message: "Ollama is unavailable." });
     });
     if (!model || !installedModels.includes(model) || false) {
-      throw createError({ statusCode: 400, message: "Choose an installed model for the guest." });
+      throw createError({
+        statusCode: 400,
+        message: "Choose an installed model for the guest.",
+      });
     }
     selectedCouncillors.push(guestCouncillor(model));
   }
@@ -217,7 +223,10 @@ export default defineEventHandler(async (event) => {
       .get(sessionId);
 
     if (liveCouncils.has(sessionId)) {
-      throw createError({ statusCode: 409, message: "This council is still in session." });
+      throw createError({
+        statusCode: 409,
+        message: "This council is still in session.",
+      });
     }
 
     if (!existingSession) {
@@ -234,7 +243,8 @@ export default defineEventHandler(async (event) => {
       question.length > 60 ? `${question.slice(0, 57)}...` : question;
 
     database
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO sessions (
           id,
           title,
@@ -243,14 +253,16 @@ export default defineEventHandler(async (event) => {
           updated_at
         )
         VALUES (?, ?, ?, ?, ?)
-      `)
+      `,
+      )
       .run(sessionId, title, mode, now, now);
   }
 
   const finalSessionId = sessionId;
 
   const previousMessages = database
-    .prepare(`
+    .prepare(
+      `
       SELECT
         role,
         content,
@@ -259,7 +271,8 @@ export default defineEventHandler(async (event) => {
       WHERE session_id = ?
       ORDER BY created_at DESC
       LIMIT 10
-    `)
+    `,
+    )
     .all(finalSessionId) as MessageRow[];
 
   previousMessages.reverse();
@@ -282,8 +295,12 @@ export default defineEventHandler(async (event) => {
 
             const recentDebate = Array.isArray(metadata?.chatMessages)
               ? metadata.chatMessages
-                  .filter((entry: CouncilChatMessage, index: number, entries: CouncilChatMessage[]) =>
-                    entry.kind === "user" || index >= entries.length - 4,
+                  .filter(
+                    (
+                      entry: CouncilChatMessage,
+                      index: number,
+                      entries: CouncilChatMessage[],
+                    ) => entry.kind === "user" || index >= entries.length - 4,
                   )
                   .map(
                     (chatMessage: CouncilChatMessage) =>
@@ -314,19 +331,34 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
 
   // A new user message reopens deliberation with the previous questions as context.
   if (body.sessionId && question) {
-    database.prepare("UPDATE council_open_questions SET status = 'addressed' WHERE session_id = ? AND status = 'open'").run(finalSessionId);
+    database
+      .prepare(
+        "UPDATE council_open_questions SET status = 'addressed' WHERE session_id = ? AND status = 'open'",
+      )
+      .run(finalSessionId);
   }
-  const agentMemories = Object.fromEntries(selectedCouncillors.map((member) => {
-    const memories = database.prepare("SELECT memory FROM agent_memories WHERE agent_id = ? ORDER BY created_at DESC LIMIT 5").all(member.id) as { memory: string }[];
-    return [member.id, memories.map((row) => row.memory).join("\n")];
-  }));
-  const unresolved = database.prepare("SELECT question FROM council_open_questions WHERE session_id = ? AND status = 'open' ORDER BY created_at DESC LIMIT 8").all(finalSessionId) as { question: string }[];
+  const agentMemories = Object.fromEntries(
+    selectedCouncillors.map((member) => {
+      const memories = database
+        .prepare(
+          "SELECT memory FROM agent_memories WHERE agent_id = ? ORDER BY created_at DESC LIMIT 5",
+        )
+        .all(member.id) as { memory: string }[];
+      return [member.id, memories.map((row) => row.memory).join("\n")];
+    }),
+  );
+  const unresolved = database
+    .prepare(
+      "SELECT question FROM council_open_questions WHERE session_id = ? AND status = 'open' ORDER BY created_at DESC LIMIT 8",
+    )
+    .all(finalSessionId) as { question: string }[];
 
   const questionId = crypto.randomUUID();
   const questionCreatedAt = new Date().toISOString();
 
   database
-    .prepare(`
+    .prepare(
+      `
       INSERT INTO messages (
         id,
         session_id,
@@ -336,15 +368,9 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
         created_at
       )
       VALUES (?, ?, ?, ?, ?, ?)
-    `)
-    .run(
-      questionId,
-      finalSessionId,
-      "user",
-      question,
-      null,
-      questionCreatedAt,
-    );
+    `,
+    )
+    .run(questionId, finalSessionId, "user", question, null, questionCreatedAt);
 
   const encoder = new TextEncoder();
 
@@ -426,9 +452,10 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
             });
 
             try {
-              const result = await generateCouncilReply({
-                model: member.model,
-                prompt: `
+              const result = await generateCouncilReply(
+                {
+                  model: member.model,
+                  prompt: `
 ${member.systemPrompt}
 
 Souvenirs personnels de cet agent: ${agentMemories[member.id] || "None"}
@@ -470,12 +497,20 @@ Structuur:
   "confidence": 75
 }
 `,
-                options: {
-                  ...member.options,
-                  num_predict: mode === "deep" ? 1400 : 950,
+                  options: {
+                    ...member.options,
+                    num_predict: mode === "deep" ? 1400 : 950,
+                  },
+                  keep_alive: keepAlive,
                 },
-                keep_alive: keepAlive,
-              }, request.signal, () => emit("member_status", { id: member.id, phase: "analysis", status: "typing" }));
+                request.signal,
+                () =>
+                  emit("member_status", {
+                    id: member.id,
+                    phase: "analysis",
+                    status: "typing",
+                  }),
+              );
 
               const advice = normalizeAdvice(
                 parseJsonResponse<StructuredAdvice>(result),
@@ -543,9 +578,7 @@ Structuur:
                 id: member.id,
                 phase: "analysis",
                 message:
-                  error instanceof Error
-                    ? error.message
-                    : "Onbekende fout.",
+                  error instanceof Error ? error.message : "Onbekende fout.",
               });
 
               roundOneAnswers.push({
@@ -557,9 +590,7 @@ Structuur:
                 success: false,
                 advice: null,
                 error:
-                  error instanceof Error
-                    ? error.message
-                    : "Onbekende fout.",
+                  error instanceof Error ? error.message : "Onbekende fout.",
               });
             }
           }
@@ -576,14 +607,19 @@ Structuur:
           const participants = selectedCouncillors.filter((member) =>
             successfulRoundOne.some((answer) => answer.id === member.id),
           );
-          const maxReplies = participants.length === 1 ? 4 : mode === "deep" ? 20 : 10;
+          const maxReplies =
+            participants.length === 1 ? 4 : mode === "deep" ? 20 : 10;
           const debateFocus = [
             "Explore a concrete use case: who does what, under which constraints, and what happens step by step? Test a claim against it.",
             "Test a previously discussed use case under changed conditions. Describe the expected outcome and why another approach might do better or worse.",
             "Revisit an objection or condition raised in the debate. Explain what outcome, evidence or edge case would change your mind.",
           ];
-          let speaker: (typeof participants)[number] | undefined = participants.find((member) => member.id === "solon") ?? participants[0];
-          const speakCounts = new Map(participants.map((member) => [member.id, 0]));
+          let speaker: (typeof participants)[number] | undefined =
+            participants.find((member) => member.id === "solon") ??
+            participants[0];
+          const speakCounts = new Map(
+            participants.map((member) => [member.id, 0]),
+          );
           let pendingQuestion = "";
           let replyTarget: CouncilChatMessage | undefined;
           let lastSeenUserMessageId: string | undefined;
@@ -592,31 +628,39 @@ Structuur:
             if (cancelled) return;
             const member: (typeof participants)[number] = speaker;
             speakCounts.set(member.id, (speakCounts.get(member.id) ?? 0) + 1);
-            const others = participants.filter((participant) => participant.id !== member.id);
+            const others = participants.filter(
+              (participant) => participant.id !== member.id,
+            );
             emit("debate_status", { id: member.id, status: "reading" });
             await delay(400);
             if (cancelled) return;
             emit("debate_status", { id: member.id, status: "thinking" });
 
-            const focus = debateFocus[Math.floor(turn * debateFocus.length / maxReplies)];
+            const focus =
+              debateFocus[Math.floor((turn * debateFocus.length) / maxReplies)];
             const transcript = chatMessages.map((entry, index) => ({
               speaker: entry.name,
               position: entry.position,
-              message: entry.kind === "reply" && index < chatMessages.length - 6
-                ? entry.message.slice(0, 450)
-                : entry.message,
+              message:
+                entry.kind === "reply" && index < chatMessages.length - 6
+                  ? entry.message.slice(0, 450)
+                  : entry.message,
               question: entry.followUpQuestion,
               recommendation: entry.recommendation,
             }));
-            const latestUser = chatMessages.findLast((entry) => entry.kind === "user");
-            const newUserMessage = latestUser?.id !== lastSeenUserMessageId ? latestUser : undefined;
+            const latestUser = chatMessages.findLast(
+              (entry) => entry.kind === "user",
+            );
+            const newUserMessage =
+              latestUser?.id !== lastSeenUserMessageId ? latestUser : undefined;
             lastSeenUserMessageId = latestUser?.id;
 
             let addresseeId: string | undefined;
             try {
-              const result = await generateCouncilReply({
-                model: member.model,
-                prompt: `
+              const result = await generateCouncilReply(
+                {
+                  model: member.model,
+                  prompt: `
 ${member.systemPrompt}
 
 Question: ${question}
@@ -626,10 +670,12 @@ Andere deelnemers: ${JSON.stringify(others.map(({ id, name }) => ({ id, name }))
 Gesprek tot nu toe:
 ${JSON.stringify(transcript)}
 
-${replyTarget
-  ? `Respond directly to this message from ${replyTarget.name}: ${JSON.stringify(replyTarget.message)}
+${
+  replyTarget
+    ? `Respond directly to this message from ${replyTarget.name}: ${JSON.stringify(replyTarget.message)}
 ${replyTarget.followUpQuestion ? `First explicitly answer this open question: ${JSON.stringify(replyTarget.followUpQuestion)}` : "Address the specific objection before je verdergaat."}`
-  : "Choose a specific, insufficiently supported argument and address its author by name."}
+    : "Choose a specific, insufficiently supported argument and address its author by name."
+}
 ${newUserMessage ? `Also incorporate this new contribution from the user: ${JSON.stringify(newUserMessage.message)}` : ""}
 
 Focus for this contribution: ${focus}
@@ -639,9 +685,11 @@ Use a concrete example with consequences or make the differences between two app
 Use numbers only if supplied by the user or explicitly marked as hypothetical examples.
 Avoid vague terms such as scalability, friction or complexity without explaining what actually changes.
 Leg uit wat je behoudt of herziet en waarom. Herhaal geen al afgehandeld argument.
-${turn < maxReplies - 1
-  ? "Optionally ask one precise follow-up question about a decision, assumption or edge case. Put the question only in followUpQuestion and the intended respondent's ID in addressedTo."
-  : "Dit is de laatste repliek. Werk het open punt af en laat followUpQuestion leeg."}
+${
+  turn < maxReplies - 1
+    ? "Optionally ask one precise follow-up question about a decision, assumption or edge case. Put the question only in followUpQuestion and the intended respondent's ID in addressedTo."
+    : "Dit is de laatste repliek. Werk het open punt af en laat followUpQuestion leeg."
+}
 If essential personal information is missing, address a precise question to "user". You may introduce a relevant subtopic or challenge another participant without waiting for a fixed turn. Never invent facts. Reply in the user's language.
 Use "user" when asking the user a question. With only one councillor, critically examine your own reasoning and develop a counterexample.
 Develop your reasoning over two or three short paragraphs when helpful. Return only valid JSON.
@@ -655,17 +703,37 @@ Develop your reasoning over two or three short paragraphs when helpful. Return o
   "confidence": 75
 }
 `,
-                options: { ...member.options, temperature: 0.5, num_predict: mode === "deep" ? 1400 : 950 },
-                keep_alive: keepAlive,
-              }, request.signal, () => emit("debate_status", { id: member.id, status: "typing" }));
+                  options: {
+                    ...member.options,
+                    temperature: 0.5,
+                    num_predict: mode === "deep" ? 1400 : 950,
+                  },
+                  keep_alive: keepAlive,
+                },
+                request.signal,
+                () =>
+                  emit("debate_status", { id: member.id, status: "typing" }),
+              );
 
               const parsed = parseJsonResponse<DebateReply>(result);
               const message = parsed.message?.trim();
-              if (!message) throw new Error("The councillor returned no substantive reply.");
-              const addressedMember = others.find((other) => other.id === parsed.addressedTo);
+              if (!message)
+                throw new Error(
+                  "The councillor returned no substantive reply.",
+                );
+              const addressedMember = others.find(
+                (other) => other.id === parsed.addressedTo,
+              );
               addresseeId = addressedMember?.id;
-              const addressedTo = addresseeId ?? (parsed.addressedTo === "user" ? "user" : undefined);
-              const position = ["defend", "revise", "clarify", "challenge"].includes(parsed.position)
+              const addressedTo =
+                addresseeId ??
+                (parsed.addressedTo === "user" ? "user" : undefined);
+              const position = [
+                "defend",
+                "revise",
+                "clarify",
+                "challenge",
+              ].includes(parsed.position)
                 ? parsed.position
                 : undefined;
 
@@ -679,17 +747,24 @@ Develop your reasoning over two or three short paragraphs when helpful. Return o
                 kind: "reply",
                 replyTo: addressedTo ? [addressedTo] : [],
                 message,
-                followUpQuestion: turn < maxReplies - 1 && addressedTo && typeof parsed.followUpQuestion === "string"
-                  ? parsed.followUpQuestion.trim() || undefined
-                  : undefined,
+                followUpQuestion:
+                  turn < maxReplies - 1 &&
+                  addressedTo &&
+                  typeof parsed.followUpQuestion === "string"
+                    ? parsed.followUpQuestion.trim() || undefined
+                    : undefined,
                 position,
-                recommendation: position === "revise" ? parsed.revisedRecommendation?.trim() : undefined,
+                recommendation:
+                  position === "revise"
+                    ? parsed.revisedRecommendation?.trim()
+                    : undefined,
                 confidence: clampConfidence(parsed.confidence),
                 createdAt: new Date().toISOString(),
               };
               chatMessages.push(reply);
               emit("chat_message", reply);
-              if (addressedTo === "user" && reply.followUpQuestion) pendingQuestion = reply.followUpQuestion;
+              if (addressedTo === "user" && reply.followUpQuestion)
+                pendingQuestion = reply.followUpQuestion;
               emit("debate_status", { id: member.id, status: "done" });
               replyTarget = reply;
             } catch (error) {
@@ -697,19 +772,31 @@ Develop your reasoning over two or three short paragraphs when helpful. Return o
               emit("member_error", {
                 id: member.id,
                 phase: "debate",
-                message: error instanceof Error ? error.message : "Debatreactie mislukt.",
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : "Debatreactie mislukt.",
               });
               replyTarget = undefined;
             }
 
             // Event-inspired scheduling: an explicit challenge takes priority;
             // otherwise choose the least-heard participant, not a fixed rotation.
-            const addressed = participants.find((candidate) => candidate.id === addresseeId);
-            const eligible = participants.filter((candidate) => candidate.id !== member.id);
-            speaker = addressed ?? eligible.sort((a, b) =>
-              (speakCounts.get(a.id) ?? 0) - (speakCounts.get(b.id) ?? 0)
-            )[0] ?? (participants.length === 1 ? member : undefined);
-            if (replyTarget && replyTarget.replyTo[0] !== speaker?.id) replyTarget = undefined;
+            const addressed = participants.find(
+              (candidate) => candidate.id === addresseeId,
+            );
+            const eligible = participants.filter(
+              (candidate) => candidate.id !== member.id,
+            );
+            speaker =
+              addressed ??
+              eligible.sort(
+                (a, b) =>
+                  (speakCounts.get(a.id) ?? 0) - (speakCounts.get(b.id) ?? 0),
+              )[0] ??
+              (participants.length === 1 ? member : undefined);
+            if (replyTarget && replyTarget.replyTo[0] !== speaker?.id)
+              replyTarget = undefined;
             // Pause at a meaningful question rather than manufacturing a conclusion.
             if (pendingQuestion && turn >= Math.min(5, maxReplies - 1)) break;
           }
@@ -718,23 +805,49 @@ Develop your reasoning over two or three short paragraphs when helpful. Return o
           acceptingInterjections = false;
           emit("interjections_closed", {});
           if (!successfulRoundOne.length) {
-            throw new Error("Geen raadslid kon antwoorden. Controleer of Ollama draait en het model beschikbaar is.");
+            throw new Error(
+              "Geen raadslid kon antwoorden. Controleer of Ollama draait en het model beschikbaar is.",
+            );
           }
 
           for (const member of participants) {
-            const contributions = chatMessages.filter((entry) => entry.councillorId === member.id);
+            const contributions = chatMessages.filter(
+              (entry) => entry.councillorId === member.id,
+            );
             if (!contributions.length) continue;
-            const memory = contributions.slice(-3).map((entry) => entry.message.slice(0, 500)).join(" | ");
-            database.prepare("INSERT INTO agent_memories (id, agent_id, session_id, memory, created_at) VALUES (?, ?, ?, ?, ?)")
-              .run(crypto.randomUUID(), member.id, finalSessionId, memory, new Date().toISOString());
+            const memory = contributions
+              .slice(-3)
+              .map((entry) => entry.message.slice(0, 500))
+              .join(" | ");
+            database
+              .prepare(
+                "INSERT INTO agent_memories (id, agent_id, session_id, memory, created_at) VALUES (?, ?, ?, ?, ?)",
+              )
+              .run(
+                crypto.randomUUID(),
+                member.id,
+                finalSessionId,
+                memory,
+                new Date().toISOString(),
+              );
           }
           if (pendingQuestion) {
-            database.prepare("INSERT INTO council_open_questions (id, session_id, question, status, created_at) VALUES (?, ?, ?, 'open', ?)")
-              .run(crypto.randomUUID(), finalSessionId, pendingQuestion, new Date().toISOString());
+            database
+              .prepare(
+                "INSERT INTO council_open_questions (id, session_id, question, status, created_at) VALUES (?, ?, ?, 'open', ?)",
+              )
+              .run(
+                crypto.randomUUID(),
+                finalSessionId,
+                pendingQuestion,
+                new Date().toISOString(),
+              );
           }
           let conclusion: ChairmanConclusion | null = null;
 
-          const chairmanModel = participants.find(({ model }) => model === councilModel) ?? participants[0];
+          const chairmanModel =
+            participants.find(({ model }) => model === councilModel) ??
+            participants[0];
           if (chairmanModel && !pendingQuestion) {
             emit("chairman_status", {
               status: "reading" satisfies ActivityStatus,
@@ -747,9 +860,10 @@ Develop your reasoning over two or three short paragraphs when helpful. Return o
             });
 
             try {
-              const chairmanResult = await generateCouncilReply({
-                model: chairmanModel.model,
-                prompt: `
+              const chairmanResult = await generateCouncilReply(
+                {
+                  model: chairmanModel.model,
+                  prompt: `
 You are the facilitator of a personal AI Council.
 
 Previous conversation context:
@@ -771,12 +885,14 @@ ${JSON.stringify(
 )}
 
 Volledige live chat:
-${JSON.stringify(chatMessages.map((entry) => ({
-  speaker: entry.name,
-  message: entry.message,
-  recommendation: entry.recommendation,
-  question: entry.followUpQuestion,
-})))}
+${JSON.stringify(
+  chatMessages.map((entry) => ({
+    speaker: entry.name,
+    message: entry.message,
+    recommendation: entry.recommendation,
+    question: entry.followUpQuestion,
+  })),
+)}
 
 Formulate one practical final recommendation.
 
@@ -802,21 +918,22 @@ Structuur:
   "confidence": 75
 }
 `,
-                options: {
-                  temperature: 0.2,
-                  top_p: 0.8,
-                  top_k: 25,
-                  repeat_penalty: 1.15,
-                  num_ctx: 8192,
-                  num_predict: mode === "deep" ? 1550 : 1100,
+                  options: {
+                    temperature: 0.2,
+                    top_p: 0.8,
+                    top_k: 25,
+                    repeat_penalty: 1.15,
+                    num_ctx: 8192,
+                    num_predict: mode === "deep" ? 1550 : 1100,
+                  },
+                  keep_alive: keepAlive,
                 },
-                keep_alive: keepAlive,
-              }, request.signal, () => emit("chairman_status", { status: "typing" }));
+                request.signal,
+                () => emit("chairman_status", { status: "typing" }),
+              );
 
               conclusion = normalizeConclusion(
-                parseJsonResponse<ChairmanConclusion>(
-                  chairmanResult,
-                ),
+                parseJsonResponse<ChairmanConclusion>(chairmanResult),
               );
 
               const chairmanMessage: CouncilChatMessage = {
@@ -863,7 +980,8 @@ Structuur:
           }
 
           if (cancelled) return;
-          const councilResponse = {\n            openQuestion: pendingQuestion || null,
+          const councilResponse = {
+            openQuestion: pendingQuestion || null,
             id: crypto.randomUUID(),
             sessionId: finalSessionId,
             createdAt: new Date().toISOString(),
@@ -877,7 +995,8 @@ Structuur:
           };
 
           database
-            .prepare(`
+            .prepare(
+              `
               INSERT INTO messages (
                 id,
                 session_id,
@@ -887,7 +1006,8 @@ Structuur:
                 created_at
               )
               VALUES (?, ?, ?, ?, ?, ?)
-            `)
+            `,
+            )
             .run(
               councilResponse.id,
               finalSessionId,
@@ -898,20 +1018,21 @@ Structuur:
             );
 
           database
-            .prepare(`
+            .prepare(
+              `
               UPDATE sessions
               SET
                 mode = ?,
                 updated_at = ?
               WHERE id = ?
-            `)
+            `,
+            )
             .run(mode, councilResponse.createdAt, finalSessionId);
 
           emit("complete", councilResponse);
         } catch (error) {
           emit("fatal_error", {
-            message:
-              error instanceof Error ? error.message : "Onbekende fout.",
+            message: error instanceof Error ? error.message : "Onbekende fout.",
           });
         } finally {
           liveCouncils.delete(finalSessionId);
