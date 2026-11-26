@@ -110,7 +110,7 @@ function parseJsonResponse<T>(response: string): T {
     const end = cleaned.lastIndexOf("}");
 
     if (start === -1 || end <= start) {
-      throw new Error("Het model gaf geen geldige JSON terug.");
+      throw new Error("The model returned invalid JSON.");
     }
 
     return JSON.parse(cleaned.slice(start, end + 1)) as T;
@@ -177,7 +177,7 @@ export default defineEventHandler(async (event) => {
   if (!question || question.length > 4000) {
     throw createError({
       statusCode: 400,
-      statusMessage: "Geef een vraag van maximaal 4000 tekens mee.",
+      statusMessage: "Enter a question of at most 4,000 characters.",
     });
   }
 
@@ -194,7 +194,7 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 503, message: "Ollama is niet bereikbaar." });
     });
     if (!model || !installedModels.includes(model) || false) {
-      throw createError({ statusCode: 400, message: "Kies een geïnstalleerd model voor de gast." });
+      throw createError({ statusCode: 400, message: "Choose an installed model for the guest." });
     }
     selectedCouncillors.push(guestCouncillor(model));
   }
@@ -205,7 +205,7 @@ export default defineEventHandler(async (event) => {
   if (!selectedCouncillors.length) {
     throw createError({
       statusCode: 400,
-      statusMessage: "Selecteer minstens één raadslid.",
+      statusMessage: "Select at least one councillor.",
     });
   }
 
@@ -431,10 +431,10 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
                 prompt: `
 ${member.systemPrompt}
 
-Souvenirs personnels de cet agent: ${agentMemories[member.id] || "Aucun"}
+Souvenirs personnels de cet agent: ${agentMemories[member.id] || "None"}
 Questions encore ouvertes: ${JSON.stringify(unresolved)}
 
-Persoonlijke context:
+Personal context:
 ${profileContext}
 
 Context uit eerdere vragen en besluiten:
@@ -446,7 +446,7 @@ ${question}
 Aanvullingen van de gebruiker tijdens deze ronde:
 ${JSON.stringify(chatMessages.filter((entry) => entry.kind === "user").map((entry) => entry.message))}
 
-Geef een onafhankelijk standpunt vanuit jouw specialisatie. Koppel het aan één concreet gebruiksgeval uit de vraag.
+Give an independent position from your specialist perspective. Connect it to one concrete use case from the question.
 Benoem de actor, wat die probeert te doen en waar de keuze in die situatie verschil maakt.
 Als iets ontbreekt, gebruik een expliciete werkhypothese en leg uit wat verandert als ze niet klopt.
 
@@ -456,8 +456,8 @@ Regels:
 - Maximaal twee voordelen en twee risico's.
 - Houd ieder punt kort.
 - Verzin geen actuele wetten, belastingen of marktgegevens.
-- Réponds dans la langue de la question, en français si la question est en français.
-- Geef uitsluitend volledige en geldige JSON terug.
+- Respond in the user's language, whether English, French, Dutch or another supported language.
+- Return only complete, valid JSON.
 
 Structuur:
 {
@@ -578,9 +578,9 @@ Structuur:
           );
           const maxReplies = participants.length === 1 ? 4 : mode === "deep" ? 20 : 10;
           const debateFocus = [
-            "Maak een concrete use case scherp: wie doet wat, onder welke beperkingen, en wat gebeurt er stap voor stap? Toets een standpunt op die use case.",
+            "Explore a concrete use case: who does what, under which constraints, and what happens step by step? Test a claim against it.",
             "Test een eerder besproken use case onder een veranderde voorwaarde. Beschrijf het verwachte gevolg en wat de andere aanpak beter of slechter zou doen.",
-            "Ga terug naar een bezwaar of voorwaarde uit het debat. Maak concreet welk resultaat, meetpunt of grensgeval je van mening zou doen veranderen.",
+            "Revisit an objection or condition raised in the debate. Explain what outcome, evidence or edge case would change your mind.",
           ];
           let speaker: (typeof participants)[number] | undefined = participants.find((member) => member.id === "solon") ?? participants[0];
           const speakCounts = new Map(participants.map((member) => [member.id, 0]));
@@ -619,8 +619,8 @@ Structuur:
                 prompt: `
 ${member.systemPrompt}
 
-Vraag: ${question}
-Eerdere context: ${previousContext.slice(-4000)}\nSouvenirs: ${agentMemories[member.id] || "Aucun"}\nQuestions ouvertes: ${JSON.stringify(unresolved)}
+Question: ${question}
+Previous context: ${previousContext.slice(-4000)}\nMemories: ${agentMemories[member.id] || "None"}\nOpen questions: ${JSON.stringify(unresolved)}
 Andere deelnemers: ${JSON.stringify(others.map(({ id, name }) => ({ id, name })))}
 
 Gesprek tot nu toe:
@@ -629,28 +629,28 @@ ${JSON.stringify(transcript)}
 ${replyTarget
   ? `Reageer rechtstreeks op dit bericht van ${replyTarget.name}: ${JSON.stringify(replyTarget.message)}
 ${replyTarget.followUpQuestion ? `Beantwoord deze open vraag eerst expliciet: ${JSON.stringify(replyTarget.followUpQuestion)}` : "Beantwoord het concrete bezwaar voordat je verdergaat."}`
-  : "Kies een concreet argument dat nog onvoldoende is onderbouwd en spreek de auteur bij naam aan."}
+  : "Choose a specific, insufficiently supported argument and address its author by name."}
 ${newUserMessage ? `Betrek ook deze nieuwe bijdrage van de gebruiker in je reactie: ${JSON.stringify(newUserMessage.message)}` : ""}
 
 Focus voor deze bijdrage: ${focus}
 
-Schrijf een natuurlijke repliek aan de betrokken persoon. Grijp terug op een specifieke uitspraak.
-Gebruik een concreet voorbeeld met gevolgen of maak het verschil tussen twee aanpakken tastbaar.
-Gebruik cijfers alleen als de gebruiker die gaf of als je duidelijk zegt dat het voorbeeldwaarden zijn.
-Vermijd algemene termen zoals schaalbaarheid, frictie of complexiteit zonder te beschrijven wat er concreet verandert.
+Write a natural reply to the person concerned. Refer to a specific statement.
+Use a concrete example with consequences or make the differences between two approaches tangible.
+Use numbers only if supplied by the user or explicitly marked as hypothetical examples.
+Avoid vague terms such as scalability, friction or complexity without explaining what actually changes.
 Leg uit wat je behoudt of herziet en waarom. Herhaal geen al afgehandeld argument.
 ${turn < maxReplies - 1
-  ? "Stel eventueel één gerichte vervolgvraag over een beslissing, aanname of grensgeval. Zet de vraag alleen in followUpQuestion en zet het ID van degene die moet antwoorden in addressedTo."
+  ? "Optionally ask one precise follow-up question about a decision, assumption or edge case. Put the question only in followUpQuestion and the intended respondent's ID in addressedTo."
   : "Dit is de laatste repliek. Werk het open punt af en laat followUpQuestion leeg."}
-Si une information personnelle essentielle manque, adresse une question précise à "user". Tu peux ouvrir un sous-sujet pertinent ou contester un interlocuteur, sans attendre un tour prédéfini. N'invente pas de faits. Réponds dans la langue de l'utilisateur.
-Gebruik "user" voor een vraag aan de gebruiker. Bij één raadslid: toets je eigen eerdere redenering en werk het tegenvoorbeeld uit.
-Werk je redenering uit in twee of drie korte alinea's als dat helpt. Geef alleen geldige JSON terug.
+If essential personal information is missing, address a precise question to "user". You may introduce a relevant subtopic or challenge another participant without waiting for a fixed turn. Never invent facts. Reply in the user's language.
+Use "user" when asking the user a question. With only one councillor, critically examine your own reasoning and develop a counterexample.
+Develop your reasoning over two or three short paragraphs when helpful. Return only valid JSON.
 
 {
   "addressedTo": "ID van degene die moet antwoorden, of user",
   "position": "defend, revise, clarify of challenge",
   "message": "Directe, uitgewerkte reactie met het concrete voorbeeld",
-  "followUpQuestion": "Eén gerichte vervolgvraag, of leeg",
+  "followUpQuestion": "One precise follow-up question, or empty",
   "revisedRecommendation": "Nieuwe aanbeveling, of leeg als die hetzelfde blijft",
   "confidence": 75
 }
@@ -661,7 +661,7 @@ Werk je redenering uit in twee of drie korte alinea's als dat helpt. Geef alleen
 
               const parsed = parseJsonResponse<DebateReply>(result);
               const message = parsed.message?.trim();
-              if (!message) throw new Error("Het raadslid gaf geen inhoudelijke reactie.");
+              if (!message) throw new Error("The councillor returned no substantive reply.");
               const addressedMember = others.find((other) => other.id === parsed.addressedTo);
               addresseeId = addressedMember?.id;
               const addressedTo = addresseeId ?? (parsed.addressedTo === "user" ? "user" : undefined);
@@ -750,12 +750,12 @@ Werk je redenering uit in twee of drie korte alinea's als dat helpt. Geef alleen
               const chairmanResult = await generateCouncilReply({
                 model: chairmanModel.model,
                 prompt: `
-Je bent de voorzitter van een persoonlijke AI Council.
+You are the facilitator of a personal AI Council.
 
-Eerdere gesprekscontext:
+Previous conversation context:
 ${previousContext}
 
-Vraag:
+Question:
 ${question}
 
 Eerste analyses:
@@ -778,17 +778,17 @@ ${JSON.stringify(chatMessages.map((entry) => ({
   question: entry.followUpQuestion,
 })))}
 
-Formuleer één praktisch eindadvies.
+Formulate one practical final recommendation.
 
 Regels:
-- Gebruik de eerste standpunten, de reacties en de relevante bijdragen van de gebruiker.
+- Use initial positions, debate replies and relevant contributions from the user.
 - Benoem concreet wie door welk argument van standpunt veranderde. Beschrijf ook welke bezwaren onbeantwoord bleven.
 - Leg uit welke aanpak past in de uitgewerkte use cases, wat verandert in het wat-als-scenario en welke voorwaarde het advies doet kantelen.
 - Maximaal drie overeenkomsten.
 - Maximaal drie meningsverschillen.
 - Maximaal vier volgende stappen.
 - Verzin geen actuele wetten, belastingen of marktgegevens.
-- Geef uitsluitend volledige en geldige JSON terug.
+- Return only complete, valid JSON.
 
 Structuur:
 {
@@ -892,7 +892,7 @@ Structuur:
               councilResponse.id,
               finalSessionId,
               "council",
-              conclusion?.verdict || "De raad heeft geantwoord.",
+              conclusion?.verdict || "The council has responded.",
               JSON.stringify(councilResponse),
               councilResponse.createdAt,
             );
