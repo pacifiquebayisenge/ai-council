@@ -44,9 +44,7 @@ const activity = ref<Record<string, Activity>>({});
 const models = ref<string[]>([]);
 const guestModel = ref("");
 const modelStatus = ref("");
-const guestModels = computed(() => models.value.filter((model) =>
-  !councilMembers.some((member) => member.model === model && selectedIds.value.includes(member.id)),
-));
+const guestModels = computed(() => models.value);
 const participants = computed(() => [
   { id: "user", name: "Jij", role: "Deelnemer" },
   ...councilMembers.filter(({ id }) => selectedIds.value.includes(id)),
@@ -294,7 +292,7 @@ function addressee(entry: ChatMessage) {
               </select>
             </label>
             <small v-if="modelStatus">{{ modelStatus }}</small>
-            <small v-else-if="!guestModels.length">Vera kan meedoen zodra er een vrij Ollama-model is.</small>
+            <small v-else-if="!guestModels.length">Een gast kan meedoen zodra Ollama een model beschikbaar heeft.</small>
           </div>
         </details>
         <button class="quiet" type="button" :disabled="running || sending || !sessionId" @click="newConversation">
