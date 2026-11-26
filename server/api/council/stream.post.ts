@@ -624,9 +624,63 @@ Structuur:
           let replyTarget: CouncilChatMessage | undefined;
           let lastSeenUserMessageId: string | undefined;
 
+          // Agents request the floor in response to new events. The shared model
+          // evaluates all candidates in one inexpensive structured call per turn.
+          // This is not simultaneous inference: it is event-driven arbitration.
+          async function chooseNextSpeaker(turn: number) {
+            if (!participants.length) return undefined;
+            if (participants.length === 1) return participants[0];
+            const latest = chatMessages.slice(-5).map((entry) => ({
+              id: entry.councillorId,
+              name: entry.name,
+              message: entry.message.slice(0, 750),
+              question: entry.followUpQuestion,
+              addressedTo: entry.replyTo[0],
+            }));
+            for (const candidate of participants) {
+              emit("debate_status", { id: candidate.id, status: "reading" });
+            }
+            try {
+              const raw = await generateCouncilReply(
+                {
+                  model: participants[0].model,
+                  prompt: `You are a neutral debate floor manager, not a debater.
+Question: ${question}
+Recent events: ${JSON.stringify(latest)}
+Candidates: ${JSON.stringify(participants.map((candidate) => ({
+  id: candidate.id,
+  name: candidate.name,
+  role: candidate.role,
+  interventions: speakCounts.get(candidate.id) ?? 0,
+})))}
+Pick the participant with the strongest REASON to respond next. An explicit
+question or objection to a participant matters, but anyone can interrupt
+with a more important challenge. The same participant MAY speak again.
+Do not mechanically rotate or favour the least-heard participant.
+Return only JSON:
+{"speakerId":"one candidate ID","reason":"specific argument to address","urgency":1}
+`,
+                  options: { temperature: 0.25, num_ctx: 4096, num_predict: 150 },
+                  keep_alive: keepAlive,
+                },
+                request.signal,
+                () => {},
+              );
+              const decision = parseJsonResponse<{ speakerId: string; reason: string; urgency: number }>(raw);
+              const selected = participants.find((candidate) => candidate.id === decision.speakerId);
+              if (selected) return selected;
+            } catch {
+              // Fall back to direct reply targeting if arbitration fails.
+            }
+            const addressedId = chatMessages.at(-1)?.replyTo[0];
+            return participants.find((candidate) => candidate.id === addressedId)
+              ?? participants.find((candidate) => candidate.id !== chatMessages.at(-1)?.councillorId)
+              ?? participants[0];
+          }
+
           for (let turn = 0; speaker && turn < maxReplies; turn++) {
             if (cancelled) return;
-            const member: (typeof participants)[number] = speaker;
+            speaker = await chooseNextSpeaker(turn);\n            if (!speaker) break;\n            const member: (typeof participants)[number] = speaker;
             speakCounts.set(member.id, (speakCounts.get(member.id) ?? 0) + 1);
             const others = participants.filter(
               (participant) => participant.id !== member.id,
@@ -780,23 +834,9 @@ Develop your reasoning over two or three short paragraphs when helpful. Return o
               replyTarget = undefined;
             }
 
-            // Event-inspired scheduling: an explicit challenge takes priority;
-            // otherwise choose the least-heard participant, not a fixed rotation.
-            const addressed = participants.find(
-              (candidate) => candidate.id === addresseeId,
-            );
-            const eligible = participants.filter(
-              (candidate) => candidate.id !== member.id,
-            );
-            speaker =
-              addressed ??
-              eligible.sort(
-                (a, b) =>
-                  (speakCounts.get(a.id) ?? 0) - (speakCounts.get(b.id) ?? 0),
-              )[0] ??
-              (participants.length === 1 ? member : undefined);
-            if (replyTarget && replyTarget.replyTo[0] !== speaker?.id)
-              replyTarget = undefined;
+            // The next speaker will be selected by fresh agent bids.
+            speaker = participants[0];
+            replyTarget = chatMessages.at(-1);
             // Pause at a meaningful question rather than manufacturing a conclusion.
             if (pendingQuestion && turn >= Math.min(5, maxReplies - 1)) break;
           }
