@@ -41,6 +41,25 @@ database.exec(`
   ON sessions(updated_at DESC);
 `);
 
+database.exec(`
+  CREATE TABLE IF NOT EXISTS agent_memories (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    memory TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_agent_memories_agent ON agent_memories(agent_id, created_at DESC);
+  CREATE TABLE IF NOT EXISTS council_open_questions (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_open_questions_session ON council_open_questions(session_id, status);
+`);
+
 export interface StoredSession {
   id: string;
   title: string;
