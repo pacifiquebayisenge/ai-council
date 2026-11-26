@@ -1,1874 +1,460 @@
 <script setup lang="ts">
 import { councilMembers, councilModel } from "#shared/council";
 
-type ActivityStatus =
-  | "waiting"
-  | "reading"
-  | "thinking"
-  | "typing"
-  | "speaking"
-  | "done"
-  | "error";
-
-interface StructuredAdvice {
-  summary: string;
-  keyPoints: string[];
-  advantages: string[];
-  risks: string[];
-  recommendation: string;
-  missingInformation: string[];
-  confidence: number;
-}
-
-interface CouncilAnswer {
+interface ChatMessage {
   id: string;
   name: string;
-  role: string;
-  description: string;
-  emoji: string;
-  success: boolean;
-  advice: StructuredAdvice | null;
-  error?: string;
-}
-
-interface CouncilChatMessage {
-  id: string;
   councillorId: string;
-  name: string;
-  emoji: string;
-  role: string;
-  round: number;
   kind: "opening" | "reply" | "chairman" | "user";
-  replyTo: string[];
   message: string;
+  replyTo: string[];
   recommendation?: string;
-  confidence?: number;
-  createdAt: string;
+  position?: "defend" | "revise" | "clarify" | "challenge";
 }
 
-interface ChairmanConclusion {
-  verdict: string;
-  recommendedAction: string;
+interface Conclusion {
   reasoning: string;
   consensus: string[];
   disagreements: string[];
   nextSteps: string[];
   importantCaution: string;
-  confidence: number;
 }
 
-interface StreamEvent {
-  type: string;
-  payload: any;
-  timestamp: string;
-}
-
-interface UserProfile {
-  country: string;
-  situation: string;
-  goals: string;
-  riskProfile: string;
-  timeHorizon: string;
-}
-
-interface CouncilMember {
-  id: string;
-  name: string;
-  emoji: string;
-  role: string;
-  analysisStatus: ActivityStatus;
-  debateStatus: ActivityStatus;
-  answer: CouncilAnswer | null;
-}
-
-const members = ref<CouncilMember[]>(councilMembers.map((member) => ({
-  ...member,
-  analysisStatus: "waiting",
-  debateStatus: "waiting",
-  answer: null,
-})));
-
-const message = ref("");
+const transcript = ref<ChatMessage[]>([]);
+const conclusions = ref<Record<string, Conclusion>>({});
+const draft = ref("");
+const sessionId = ref<string>();
 const mode = ref<"quick" | "deep">("quick");
-const selectedCouncillorIds = ref(members.value.map((member) => member.id));
-const activeSessionId = ref<string | null>(null);
-const activeRound = ref(0);
-const chairmanStatus = ref<ActivityStatus>("waiting");
-const conclusion = ref<ChairmanConclusion | null>(null);
-const chatMessages = ref<CouncilChatMessage[]>([]);
-const isRunning = ref(false);
-const canInterject = ref(false);
-const isSending = ref(false);
+const selectedIds = ref(councilMembers.map(({ id }) => id));
+const running = ref(false);
+const sending = ref(false);
+const accepting = ref(false);
+const speaker = ref("");
 const errorMessage = ref("");
-const chatContainer = ref<HTMLElement | null>(null);
-
-const profile = reactive<UserProfile>({
+const chat = ref<HTMLElement>();
+const composer = ref<HTMLTextAreaElement>();
+const profile = ref<Record<string, string>>({
   country: "België",
-  situation: "",
-  goals: "",
   riskProfile: "Gemiddeld",
   timeHorizon: "Lange termijn",
 });
 
-const selectedMembers = computed(() =>
-  members.value.filter((member) =>
-    selectedCouncillorIds.value.includes(member.id),
-  ),
-);
-
-const activeSpeaker = computed(() => {
-  if (chairmanStatus.value === "speaking") {
-    return "Voorzitter";
-  }
-
-  return (
-    members.value.find(
-      (member) =>
-        member.analysisStatus === "speaking" ||
-        member.debateStatus === "speaking",
-    )?.name || null
-  );
+const names = new Map(councilMembers.map(({ id, name }) => [id, name]));
+const placeholder = computed(() => {
+  if (running.value && accepting.value) return "Meng je in het gesprek…";
+  if (sessionId.value) return "Stel een vervolgvraag…";
+  return "Welke vraag wil je aan de raad voorleggen?";
 });
-
-const followUpPlaceholder = computed(() =>
-  isRunning.value
-    ? "Voeg een argument of verduidelijking toe..."
-    : activeSessionId.value
-      ? "Reageer op het besluit of stel een vervolgvraag aan dezelfde raad..."
-      : "Leg een beslissing of situatie voor aan de raad...",
-);
 
 onMounted(() => {
-  const savedProfile = localStorage.getItem("ai-council-profile");
-
-  if (!savedProfile) {
-    return;
-  }
-
   try {
-    Object.assign(profile, JSON.parse(savedProfile));
+    const saved = localStorage.getItem("ai-council-profile");
+    if (saved) profile.value = { ...profile.value, ...JSON.parse(saved) };
   } catch {
-    localStorage.removeItem("ai-council-profile");
+    // A stored profile is optional.
   }
 });
 
-function statusLabel(status: ActivityStatus) {
-  return {
-    waiting: "Wacht",
-    reading: "Leest",
-    thinking: "Denkt",
-    typing: "Typt",
-    speaking: "Spreekt",
-    done: "Klaar",
-    error: "Mislukt",
-  }[status];
-}
-
-function visibleStatus(member: CouncilMember) {
-  if (activeRound.value >= 2 && member.debateStatus !== "waiting") {
-    return member.debateStatus;
-  }
-
-  return member.analysisStatus;
-}
-
-function toggleMember(id: string) {
-  if (selectedCouncillorIds.value.includes(id)) {
-    if (selectedCouncillorIds.value.length === 1) {
-      return;
-    }
-
-    selectedCouncillorIds.value = selectedCouncillorIds.value.filter(
-      (memberId) => memberId !== id,
-    );
-
-    return;
-  }
-
-  selectedCouncillorIds.value.push(id);
-}
-
-function resetCurrentRun() {
-  members.value = members.value.map((member) => ({
-    ...member,
-    analysisStatus: "waiting",
-    debateStatus: "waiting",
-    answer: null,
-  }));
-
-  activeRound.value = 0;
-  chairmanStatus.value = "waiting";
-  conclusion.value = null;
+function newConversation() {
+  sessionId.value = undefined;
+  transcript.value = [];
+  conclusions.value = {};
+  draft.value = "";
   errorMessage.value = "";
+  composer.value?.focus();
 }
 
-function startNewSession() {
-  if (isRunning.value || isSending.value) return;
-  activeSessionId.value = null;
-  message.value = "";
-  chatMessages.value = [];
-  resetCurrentRun();
-}
-
-function updateAnalysisStatus(id: string, status: ActivityStatus) {
-  const member = members.value.find((item) => item.id === id);
-
-  if (member) {
-    member.analysisStatus = status;
+function toggleParticipant(id: string) {
+  if (selectedIds.value.includes(id)) {
+    if (selectedIds.value.length > 1) {
+      selectedIds.value = selectedIds.value.filter((selected) => selected !== id);
+    }
+  } else {
+    selectedIds.value.push(id);
   }
 }
 
-function updateDebateStatus(id: string, status: ActivityStatus) {
-  const member = members.value.find((item) => item.id === id);
-
-  if (member) {
-    member.debateStatus = status;
-  }
-}
-
-async function scrollChatToBottom() {
-  await nextTick();
-
-  if (chatContainer.value) {
-    chatContainer.value.scrollTo({
-      top: chatContainer.value.scrollHeight,
-      behavior: "smooth",
+function append(entry: ChatMessage) {
+  const log = chat.value;
+  const nearBottom = !log || log.scrollHeight - log.clientHeight - log.scrollTop < 100;
+  transcript.value.push(entry);
+  if (nearBottom || entry.kind === "user") {
+    void nextTick(() => {
+      if (log) log.scrollTop = log.scrollHeight;
     });
   }
 }
 
-async function runCouncil() {
-  const question = message.value.trim();
-
-  if (!question || isSending.value || question.length > 4000) {
-    return;
+function handleEvent({ type, payload }: { type: string; payload: any }) {
+  switch (type) {
+    case "session":
+      sessionId.value = payload.sessionId;
+      accepting.value = true;
+      append({
+        id: payload.questionId,
+        name: "Jij",
+        councillorId: "user",
+        message: payload.question,
+        kind: "user",
+        replyTo: [],
+      });
+      break;
+    case "member_status":
+    case "debate_status":
+    case "chairman_status":
+      if (payload.status === "thinking") {
+        speaker.value = type === "chairman_status" ? "Voorzitter" : names.get(payload.id) || "";
+      }
+      if (payload.status === "done" || payload.status === "error") speaker.value = "";
+      break;
+    case "chat_message":
+      append(payload);
+      break;
+    case "chairman_result": {
+      const conclusion = transcript.value.findLast(({ kind }) => kind === "chairman");
+      if (conclusion) conclusions.value[conclusion.id] = payload;
+      break;
+    }
+    case "interjections_closed":
+      accepting.value = false;
+      speaker.value = "Voorzitter";
+      break;
+    case "chairman_error":
+    case "fatal_error":
+      errorMessage.value = payload.message;
+      break;
   }
+}
 
-  if (isRunning.value) {
-    if (!canInterject.value) return;
-    isSending.value = true;
-    message.value = "";
-    errorMessage.value = "";
+async function submit() {
+  const text = draft.value.trim();
+  if (!text || text.length > 4000 || sending.value || (running.value && !accepting.value)) return;
+  draft.value = "";
+  errorMessage.value = "";
 
+  if (running.value) {
+    sending.value = true;
     try {
       await $fetch("/api/council/interject", {
         method: "POST",
-        body: { sessionId: activeSessionId.value, message: question },
+        body: { sessionId: sessionId.value, message: text },
       });
     } catch (error) {
-      message.value = [question, message.value].filter(Boolean).join("\n");
+      draft.value = [text, draft.value].filter(Boolean).join("\n");
       errorMessage.value = (error as { data?: { message?: string } }).data?.message
-        || "Je bijdrage kon niet worden verstuurd.";
+        || "Je bericht kon niet worden verstuurd.";
     } finally {
-      isSending.value = false;
+      sending.value = false;
     }
     return;
   }
 
-  resetCurrentRun();
-  isRunning.value = true;
-  message.value = "";
-  let questionAccepted = false;
+  running.value = true;
+  let accepted = false;
   let finished = false;
+  function consume(line: string) {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    accepted ||= event.type === "session";
+    finished ||= event.type === "complete" || event.type === "fatal_error";
+    handleEvent(event);
+  }
 
   try {
     const response = await fetch("/api/council/stream", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        message: question,
-        sessionId: activeSessionId.value,
+        message: text,
+        sessionId: sessionId.value,
         mode: mode.value,
-        selectedCouncillorIds: selectedCouncillorIds.value,
-        profile: { ...profile },
+        selectedCouncillorIds: selectedIds.value,
+        profile: profile.value,
       }),
     });
-
     if (!response.ok || !response.body) {
       const details = await response.json().catch(() => null);
-      throw new Error(details?.message || `De raad kon niet starten (${response.status}).`);
+      throw new Error(details?.message || "De raad kon niet starten.");
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
     let buffer = "";
-
     while (true) {
       const { value, done } = await reader.read();
-
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
+      if (done) break;
+      const lines = (buffer + value).split("\n");
       buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        if (!line.trim()) {
-          continue;
-        }
-
-        const streamEvent = JSON.parse(line) as StreamEvent;
-        if (streamEvent.type === "session") questionAccepted = true;
-        if (streamEvent.type === "complete" || streamEvent.type === "fatal_error") finished = true;
-        await handleStreamEvent(streamEvent);
-      }
+      lines.forEach(consume);
     }
-
-    if (buffer.trim()) {
-      const streamEvent = JSON.parse(buffer) as StreamEvent;
-      finished ||= streamEvent.type === "complete" || streamEvent.type === "fatal_error";
-      await handleStreamEvent(streamEvent);
-    }
+    consume(buffer);
     if (!finished) throw new Error("De verbinding met de raad werd onderbroken.");
   } catch (error) {
-    if (!questionAccepted) message.value = [question, message.value].filter(Boolean).join("\n");
-
-    errorMessage.value =
-      error instanceof Error
-        ? error.message
-        : "De vergadering kon niet worden gestart.";
+    if (!accepted) draft.value = [text, draft.value].filter(Boolean).join("\n");
+    errorMessage.value = error instanceof Error ? error.message : "Er ging iets mis.";
   } finally {
-    canInterject.value = false;
-    isRunning.value = false;
+    running.value = false;
+    accepting.value = false;
+    speaker.value = "";
   }
 }
 
-async function handleStreamEvent(event: StreamEvent) {
-  switch (event.type) {
-    case "session":
-      activeSessionId.value = event.payload.sessionId;
-      activeRound.value = 1;
-      canInterject.value = true;
-      chatMessages.value.push({
-        id: event.payload.questionId,
-        councillorId: "user",
-        name: "Jij",
-        emoji: "✎",
-        role: "",
-        round: 0,
-        kind: "user",
-        replyTo: [],
-        message: event.payload.question,
-        createdAt: event.payload.questionCreatedAt,
-      });
-      await scrollChatToBottom();
-      break;
-
-    case "interjections_closed":
-      canInterject.value = false;
-      break;
-
-    case "member_status":
-      updateAnalysisStatus(event.payload.id, event.payload.status);
-      break;
-
-    case "debate_status":
-      updateDebateStatus(event.payload.id, event.payload.status);
-      break;
-
-    case "member_result": {
-      const member = members.value.find(
-        (item) => item.id === event.payload.id,
-      );
-
-      if (member) {
-        member.answer = event.payload;
-      }
-      break;
-    }
-
-    case "debate_started":
-      activeRound.value = 2;
-      break;
-
-    case "chat_message":
-      chatMessages.value.push(event.payload);
-      await scrollChatToBottom();
-      break;
-
-    case "chairman_status":
-      chairmanStatus.value = event.payload.status;
-
-      if (event.payload.status !== "waiting") {
-        activeRound.value = 3;
-      }
-      break;
-
-    case "chairman_result":
-      conclusion.value = event.payload;
-      break;
-
-    case "member_error":
-      console.warn(
-        `${event.payload.phase} fout voor ${event.payload.id}:`,
-        event.payload.message,
-      );
-      break;
-
-    case "chairman_error":
-      errorMessage.value = event.payload.message;
-      break;
-
-    case "fatal_error":
-      errorMessage.value = event.payload.message;
-      break;
-
-    case "complete":
-      activeSessionId.value = event.payload.sessionId;
-      break;
-  }
+function onEnter(event: KeyboardEvent) {
+  if (event.isComposing || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+  event.preventDefault();
+  void submit();
 }
 
-function formatTime(value: string) {
-  return new Date(value).toLocaleTimeString("nl-BE", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function addressee(entry: ChatMessage) {
+  const id = entry.replyTo[0];
+  return id === "user" ? "Jij" : id ? names.get(id) : undefined;
 }
 </script>
 
 <template>
-  <main class="app">
-    <aside class="sidebar">
-      <div class="logo">
-        <div>Ω</div>
-
-        <span>
-          <strong>Conclave</strong>
-          <small>AI Council</small>
-        </span>
-      </div>
-
-      <button class="new-button" type="button" :disabled="isRunning || isSending" @click="startNewSession">
-        ＋ Nieuwe vergadering
-      </button>
-
-      <section class="sidebar-members">
-        <p>Raadsleden</p>
-
-        <button
-          v-for="member in members"
-          :key="member.id"
-          type="button"
-          class="sidebar-member"
-          :class="{
-            selected: selectedCouncillorIds.includes(member.id),
-            active: ['reading', 'thinking', 'typing', 'speaking'].includes(
-              visibleStatus(member),
-            ),
-          }"
-          :aria-pressed="selectedCouncillorIds.includes(member.id)"
-          :disabled="isRunning"
-          @click="toggleMember(member.id)"
-        >
-          <span class="avatar">{{ member.emoji }}</span>
-
-          <span class="identity">
-            <strong>{{ member.name }}</strong>
-            <small>{{ member.role }}</small>
-          </span>
-
-          <span
-            class="state-dot"
-            :class="`state-${visibleStatus(member)}`"
-          />
-        </button>
-      </section>
-
-      <div class="local-status">
-        <span />
-        Ollama · {{ councilModel }}
-      </div>
-    </aside>
-
-    <section class="workspace">
-      <header class="topbar">
-        <div>
-          <p>LIVE COUNCIL</p>
-          <h1>Vergaderzaal</h1>
-        </div>
-
-        <div class="topbar-actions">
-          <div class="rounds">
-            <span :class="{ active: activeRound >= 1 }">1</span>
-            <i />
-            <span :class="{ active: activeRound >= 2 }">2</span>
-            <i />
-            <span :class="{ active: activeRound >= 3 }">3</span>
-          </div>
-
-          <div class="mode">
-            <button
-              type="button"
-              :class="{ active: mode === 'quick' }"
-              :disabled="isRunning"
-              @click="mode = 'quick'"
-            >
-              Snel
-            </button>
-
-            <button
-              type="button"
-              :class="{ active: mode === 'deep' }"
-              :disabled="isRunning"
-              @click="mode = 'deep'"
-            >
-              Grondig
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <div class="layout">
-        <section class="main-column">
-          <section class="chat-window">
-            <header class="chat-header">
-              <div>
-                <h2>Gesprek van de raad</h2>
-              </div>
-
-              <span>{{ chatMessages.length }} berichten</span>
-            </header>
-
-            <div ref="chatContainer" class="chat-list" role="log" aria-label="Gesprek van de raad">
-              <article
-                v-for="chatMessage in chatMessages"
-                :key="chatMessage.id"
-                class="chat-row"
-                :class="[
-                  `chat-${chatMessage.kind}`,
-                  { chairman: chatMessage.kind === 'chairman' },
-                ]"
-              >
-                <div class="chat-avatar">{{ chatMessage.emoji }}</div>
-
-                <div class="bubble">
-                  <div class="bubble-meta">
-                    <strong>{{ chatMessage.name }}</strong>
-                    <span>{{ chatMessage.role }}</span>
-
-                    <small>
-                      <template v-if="chatMessage.kind !== 'user'">Ronde {{ chatMessage.round }} · </template>
-                      {{ formatTime(chatMessage.createdAt) }}
-                    </small>
-                  </div>
-
-                  <p>{{ chatMessage.message }}</p>
-
-                  <div
-                    v-if="chatMessage.recommendation"
-                    class="bubble-recommendation"
-                  >
-                    <span>
-                      {{
-                        chatMessage.kind === "chairman"
-                          ? "Eindadvies"
-                          : chatMessage.kind === "reply"
-                            ? "Bijgesteld standpunt"
-                            : "Aanbeveling"
-                      }}
-                    </span>
-
-                    <strong>{{ chatMessage.recommendation }}</strong>
-                  </div>
-
-                  <div v-if="chatMessage.confidence !== undefined" class="confidence">
-                    <span>Overtuiging</span>
-
-                    <div>
-                      <i
-                        :style="{
-                          width: `${chatMessage.confidence}%`,
-                        }"
-                      />
-                    </div>
-
-                    <strong>{{ chatMessage.confidence }}%</strong>
-                  </div>
-                </div>
-              </article>
-
-              <div v-if="!chatMessages.length" class="empty-chat">
-                <div>◎</div>
-                <h3>De vergadering is nog stil</h3>
-                <p>
-                  De eerste standpunten en alle reacties verschijnen hier als
-                  chatbubbels.
-                </p>
-              </div>
-            </div>
-            <form class="composer" @submit.prevent="runCouncil">
-              <label class="composer-label" for="council-message">
-                {{ isRunning ? "Meng je in het debat" : activeSessionId ? "Reageer op de raad" : "Stel een vraag" }}
+  <main class="council">
+    <header class="bar">
+      <div class="brand"><span aria-hidden="true">C</span> Conclave</div>
+      <div class="actions">
+        <details class="settings">
+          <summary>Instellingen</summary>
+          <div class="settings-panel">
+            <label>
+              Debatlengte
+              <select v-model="mode" :disabled="running">
+                <option value="quick">Kort</option>
+                <option value="deep">Uitgebreid</option>
+              </select>
+            </label>
+            <fieldset :disabled="running">
+              <legend>Raadsleden</legend>
+              <label v-for="member in councilMembers" :key="member.id" class="choice">
+                <input
+                  type="checkbox"
+                  :checked="selectedIds.includes(member.id)"
+                  :disabled="selectedIds.length === 1 && selectedIds.includes(member.id)"
+                  @change="toggleParticipant(member.id)"
+                />
+                {{ member.name }}
               </label>
-              <textarea
-                id="council-message"
-                v-model="message"
-                rows="2"
-                maxlength="4000"
-                :placeholder="followUpPlaceholder"
-                @keydown.enter.exact.prevent="runCouncil"
-              />
-              <footer>
-                <p role="status">
-                  {{ isRunning
-                    ? canInterject
-                      ? "Je bijdrage gaat mee naar de volgende spreker."
-                      : "De voorzitter rondt af. Je kunt zo een vervolgbericht sturen."
-                    : "Enter om te versturen · Shift+Enter voor een nieuwe regel" }}
-                </p>
-                <button
-                  type="submit"
-                  :disabled="isSending || (isRunning && !canInterject) || !message.trim()"
-                >
-                  {{ isSending ? "Versturen…" : activeSessionId ? "Verstuur bericht" : "Start debat" }}
-                </button>
-              </footer>
-              <p v-if="errorMessage" class="error" role="alert">{{ errorMessage }}</p>
-            </form>
-          </section>
-
-          <section class="status-board">
-            <header>
-              <div>
-                <p>RONDE {{ activeRound || 1 }}</p>
-
-                <h2>
-                  {{
-                    activeRound === 2
-                      ? "De raadsleden reageren op elkaar"
-                      : activeRound === 3
-                        ? "De voorzitter formuleert het besluit"
-                        : "Onafhankelijke standpunten"
-                  }}
-                </h2>
-              </div>
-
-              <div v-if="activeSpeaker" class="speaking-now">
-                <span />
-                {{ activeSpeaker }} spreekt nu
-              </div>
-            </header>
-
-            <div class="member-grid">
-              <article
-                v-for="member in selectedMembers"
-                :key="member.id"
-                class="member-card"
-                :class="`member-${visibleStatus(member)}`"
-              >
-                <div class="member-head">
-                  <span class="avatar large">{{ member.emoji }}</span>
-
-                  <span class="identity">
-                    <strong>{{ member.name }}</strong>
-                    <small>{{ member.role }}</small>
-                  </span>
-
-                  <span class="status-pill">
-                    {{ statusLabel(visibleStatus(member)) }}
-                  </span>
-                </div>
-
-                <div
-                  v-if="visibleStatus(member) === 'reading'"
-                  class="reading-animation"
-                >
-                  <span>Leest de andere berichten</span>
-                  <div />
-                </div>
-
-                <div
-                  v-else-if="
-                    ['thinking', 'typing'].includes(visibleStatus(member))
-                  "
-                  class="dot-animation"
-                >
-                  <i />
-                  <i />
-                  <i />
-
-                  <span>
-                    {{
-                      visibleStatus(member) === "typing"
-                        ? "schrijft een bericht"
-                        : "denkt na"
-                    }}
-                  </span>
-                </div>
-
-                <div
-                  v-else-if="visibleStatus(member) === 'speaking'"
-                  class="voice-animation"
-                >
-                  <i />
-                  <i />
-                  <i />
-                  <i />
-                  <i />
-                  <span>is aan het spreken</span>
-                </div>
-
-                <p v-if="member.answer?.advice" class="member-summary">
-                  {{ member.answer.advice.summary }}
-                </p>
-              </article>
-            </div>
-          </section>
-
-          <section v-if="conclusion" class="conclusion">
-            <header>
-              <div class="chairman-icon">◇</div>
-
-              <div>
-                <p>EINDBESLUIT</p>
-                <h2>De voorzitter heeft gesproken</h2>
-              </div>
-
-              <span>{{ conclusion.confidence }}%</span>
-            </header>
-
-            <h3>{{ conclusion.verdict }}</h3>
-
-            <div class="action">
-              <span>Aanbevolen actie</span>
-              <strong>{{ conclusion.recommendedAction }}</strong>
-            </div>
-
-            <p>{{ conclusion.reasoning }}</p>
-
-            <div class="conclusion-grid">
-              <section>
-                <h4>Consensus</h4>
-
-                <ul>
-                  <li v-for="item in conclusion.consensus" :key="item">
-                    {{ item }}
-                  </li>
-                </ul>
-              </section>
-
-              <section>
-                <h4>Meningsverschillen</h4>
-
-                <ul>
-                  <li v-for="item in conclusion.disagreements" :key="item">
-                    {{ item }}
-                  </li>
-                </ul>
-              </section>
-            </div>
-          </section>
-
-
-
-        </section>
-
-        <aside class="right-panel">
-          <div class="chairman-card">
-            <div class="chairman-avatar">◇</div>
-            <strong>Voorzitter</strong>
-            <small>{{ statusLabel(chairmanStatus) }}</small>
-
-            <div
-              v-if="
-                ['reading', 'thinking', 'typing', 'speaking'].includes(
-                  chairmanStatus,
-                )
-              "
-              class="chairman-pulse"
-            >
-              <span />
-              <span />
-              <span />
-            </div>
+            </fieldset>
+            <small>Ollama · {{ councilModel }}</small>
           </div>
-
-          <section class="flow">
-            <p>VERGADERFLOW</p>
-
-            <article :class="{ active: activeRound >= 1 }">
-              <span>01</span>
-
-              <div>
-                <strong>Openingsstandpunten</strong>
-                <small>Iedereen vormt een eigen mening</small>
-              </div>
-            </article>
-
-            <article :class="{ active: activeRound >= 2 }">
-              <span>02</span>
-
-              <div>
-                <strong>Live debat</strong>
-                <small>Raadsleden lezen en antwoorden</small>
-              </div>
-            </article>
-
-            <article :class="{ active: activeRound >= 3 }">
-              <span>03</span>
-
-              <div>
-                <strong>Besluit</strong>
-                <small>Voorzitter brengt alles samen</small>
-              </div>
-            </article>
-          </section>
-        </aside>
+        </details>
+        <button class="quiet" type="button" :disabled="running || sending || !sessionId" @click="newConversation">
+          Nieuw gesprek
+        </button>
       </div>
-    </section>
+    </header>
+
+    <div ref="chat" class="timeline" role="log" aria-label="Gesprek met de raad">
+      <div v-if="!transcript.length" class="welcome">
+        <h1>Wat wil je bespreken?</h1>
+        <p>Leg een vraag voor aan de raad en meng je in het debat wanneer je wilt.</p>
+      </div>
+
+      <div v-else class="thread">
+        <article v-for="entry in transcript" :key="entry.id" class="message" :class="entry.kind">
+          <span class="avatar" :data-member="entry.councillorId" aria-hidden="true">{{ entry.name[0] }}</span>
+          <div class="content">
+            <header class="byline">
+              <strong>{{ entry.name }}</strong>
+              <span v-if="entry.kind === 'chairman'">Conclusie</span>
+              <span v-else-if="entry.kind === 'reply' && addressee(entry)">→ {{ addressee(entry) }}</span>
+              <span v-if="entry.position === 'revise'" class="revision">Herziet standpunt</span>
+            </header>
+            <p>{{ entry.message }}</p>
+            <p v-if="entry.recommendation && entry.recommendation !== entry.message" class="recommendation">{{ entry.recommendation }}</p>
+            <details v-if="conclusions[entry.id]" class="reasoning">
+              <summary>Onderbouwing en open punten</summary>
+              <p v-if="conclusions[entry.id]?.reasoning">{{ conclusions[entry.id]?.reasoning }}</p>
+              <template v-for="(label, key) in { consensus: 'Overeenkomsten', disagreements: 'Open meningsverschillen', nextSteps: 'Volgende stappen' }" :key="key">
+                <div v-if="conclusions[entry.id]?.[key]?.length">
+                  <strong>{{ label }}</strong>
+                  <ul>
+                    <li v-for="(item, index) in conclusions[entry.id]?.[key]" :key="index">{{ item }}</li>
+                  </ul>
+                </div>
+              </template>
+              <p v-if="conclusions[entry.id]?.importantCaution">{{ conclusions[entry.id]?.importantCaution }}</p>
+            </details>
+          </div>
+        </article>
+      </div>
+    </div>
+
+    <footer class="composer-shell">
+      <form class="composer" @submit.prevent="submit">
+        <div v-if="running" class="activity" role="status">
+          {{ speaker ? `${speaker} denkt na…` : "De raad is aan het overleggen…" }}
+          <span v-if="sessionId && !accepting">Je kunt zo een vervolgvraag sturen.</span>
+        </div>
+        <div class="input-row">
+          <textarea
+            ref="composer"
+            v-model="draft"
+            :placeholder="placeholder"
+            aria-label="Bericht aan de raad"
+            rows="2"
+            maxlength="4000"
+            @keydown.enter="onEnter"
+          />
+          <button
+            type="submit"
+            :disabled="!draft.trim() || sending || (running && !accepting)"
+            :aria-label="sessionId ? 'Verstuur bericht' : 'Start debat'"
+          >
+            {{ sending ? "…" : sessionId ? "Verstuur" : "Start debat" }}
+          </button>
+        </div>
+        <p v-if="errorMessage" class="error" role="alert">{{ errorMessage }}</p>
+      </form>
+    </footer>
   </main>
 </template>
 
-<style scoped>
-:global(*) {
-  box-sizing: border-box;
+<style>
+:root {
+  font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  color: #252522;
+  background: #faf9f6;
+  color-scheme: light;
 }
 
-:global(html) {
-  min-height: 100%;
-  background: #07100e;
-}
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; }
+button, textarea, select { font: inherit; }
+button, summary, select { cursor: pointer; }
+button:disabled { cursor: default; opacity: .45; }
+:focus-visible { outline: 2px solid #436858; outline-offset: 3px; }
 
-:global(body) {
-  min-height: 100%;
-  margin: 0;
-  background:
-    radial-gradient(circle at 50% -10%, rgb(29 105 75 / 18%), transparent 36%),
-    #07100e;
-  color: #edf6f1;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
-}
-
-button,
-textarea {
-  font: inherit;
-}
-
-button {
-  color: inherit;
-}
-
-.app {
+.council {
   display: grid;
-  grid-template-columns: 250px minmax(0, 1fr);
-  min-height: 100vh;
-}
-
-.sidebar {
-  position: sticky;
-  top: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100vh;
-  padding: 22px 16px;
-  border-right: 1px solid rgb(210 235 222 / 7%);
-  background: rgb(5 13 10 / 92%);
+  height: 100dvh;
 }
 
-.logo {
-  display: flex;
-  gap: 11px;
-  align-items: center;
-  padding: 0 7px 22px;
-}
-
-.logo > div {
-  display: grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  border: 1px solid rgb(112 211 160 / 20%);
-  border-radius: 13px;
-  background: rgb(64 154 108 / 9%);
-  color: #7dd2a5;
-  font-family: Georgia, serif;
-  font-size: 22px;
-}
-
-.logo strong,
-.logo small,
-.identity strong,
-.identity small {
-  display: block;
-}
-
-.logo small,
-.identity small {
-  margin-top: 3px;
-  color: #5f7167;
-  font-size: 10px;
-}
-
-.new-button {
-  width: 100%;
-  padding: 11px;
-  border: 1px solid rgb(112 211 160 / 20%);
-  border-radius: 11px;
-  background: linear-gradient(135deg, #1c6e4d, #174c39);
-  cursor: pointer;
-  font-weight: 750;
-}
-
-.sidebar-members {
-  margin-top: 25px;
-}
-
-.sidebar-members > p {
-  margin: 0 9px 9px;
-  color: #4d5e55;
-  font-size: 10px;
-  font-weight: 850;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.sidebar-member {
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  width: 100%;
-  padding: 9px;
-  border: 1px solid transparent;
-  border-radius: 11px;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-}
-
-.sidebar-member.selected {
-  background: rgb(255 255 255 / 3%);
-}
-
-.sidebar-member.active {
-  border-color: rgb(112 211 160 / 18%);
-  background: rgb(112 211 160 / 6%);
-}
-
-.avatar,
-.chat-avatar {
-  display: grid;
-  place-items: center;
-  border: 1px solid rgb(255 255 255 / 7%);
-  background: rgb(255 255 255 / 4%);
-}
-
-.avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
-}
-
-.avatar.large {
-  width: 44px;
-  height: 44px;
-  border-radius: 13px;
-  font-size: 22px;
-}
-
-.identity {
-  flex: 1;
-}
-
-.identity strong {
-  font-size: 12px;
-}
-
-.state-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #34413a;
-}
-
-.state-reading {
-  background: #6da4d6;
-  box-shadow: 0 0 10px #6da4d6;
-}
-
-.state-thinking {
-  background: #e1b45e;
-  box-shadow: 0 0 10px #e1b45e;
-}
-
-.state-typing {
-  background: #ba8ee7;
-  box-shadow: 0 0 10px #ba8ee7;
-}
-
-.state-speaking {
-  background: #70d9a2;
-  box-shadow: 0 0 12px #70d9a2;
-}
-
-.state-done {
-  background: #789b87;
-}
-
-.state-error {
-  background: #f47777;
-}
-
-.local-status {
-  position: absolute;
-  right: 16px;
-  bottom: 20px;
-  left: 16px;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 10px;
-  border: 1px solid rgb(255 255 255 / 6%);
-  border-radius: 10px;
-  color: #5c6d63;
-  font-size: 10px;
-}
-
-.local-status span {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #6fd29e;
-}
-
-.workspace {
-  min-width: 0;
-}
-
-.topbar {
+.bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 21px 28px;
-  border-bottom: 1px solid rgb(210 235 222 / 7%);
+  gap: 1rem;
+  padding: 14px clamp(16px, 4vw, 48px);
+  border-bottom: 1px solid #e7e4dd;
+  background: #fffefa;
 }
 
-.topbar p,
-.status-board header p,
-.chat-header p,
-.conclusion header p,
-.flow > p {
-  margin: 0 0 6px;
-  color: #66a17f;
-  font-size: 9px;
-  font-weight: 850;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-}
-
-.topbar h1,
-.status-board h2,
-.chat-header h2 {
-  margin: 0;
-}
-
-.topbar-actions {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-}
-
-.rounds {
-  display: flex;
-  align-items: center;
-}
-
-.rounds span {
+.brand, .actions { display: flex; align-items: center; gap: 12px; }
+.brand { font-weight: 650; }
+.brand span, .avatar {
   display: grid;
-  width: 25px;
-  height: 25px;
   place-items: center;
-  border: 1px solid rgb(255 255 255 / 8%);
-  border-radius: 50%;
-  color: #4f6057;
-  font-size: 9px;
-}
-
-.rounds span.active {
-  border-color: rgb(112 211 160 / 32%);
-  background: rgb(112 211 160 / 8%);
-  color: #7bd3a4;
-}
-
-.rounds i {
-  width: 26px;
-  height: 1px;
-  background: rgb(255 255 255 / 7%);
-}
-
-.mode {
-  display: flex;
-  padding: 3px;
-  border: 1px solid rgb(255 255 255 / 7%);
+  width: 32px;
+  height: 32px;
+  flex: none;
   border-radius: 9px;
-  background: rgb(255 255 255 / 3%);
+  background: #e6ede7;
+  color: #365244;
+  font-size: .85rem;
+  font-weight: 700;
 }
 
-.mode button {
-  padding: 7px 10px;
-  border: 0;
-  border-radius: 7px;
+.actions { font-size: .85rem; }
+.quiet {
+  padding: 7px 11px;
+  border: 1px solid #dedbd3;
+  border-radius: 8px;
   background: transparent;
-  color: #607168;
-  cursor: pointer;
-  font-size: 10px;
-}
-
-.mode button.active {
-  background: rgb(255 255 255 / 7%);
-  color: #eef6f1;
-}
-
-.layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-}
-
-.main-column {
-  min-width: 0;
-  padding: 26px 28px 60px;
-}
-
-.status-board > header,
-.chat-header,
-.conclusion > header,
-.composer footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.speaking-now {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 10px;
-  border: 1px solid rgb(112 217 162 / 18%);
-  border-radius: 999px;
-  color: #78d2a0;
-  font-size: 10px;
-}
-
-.speaking-now span {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #70d9a2;
-  box-shadow: 0 0 11px #70d9a2;
-}
-
-.member-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 18px;
-}
-
-.member-card {
-  min-height: 170px;
-  padding: 14px;
-  border: 1px solid rgb(255 255 255 / 7%);
-  border-radius: 15px;
-  background: rgb(255 255 255 / 2%);
-}
-
-.member-reading {
-  border-color: rgb(109 164 214 / 25%);
-}
-
-.member-thinking {
-  border-color: rgb(225 180 94 / 25%);
-}
-
-.member-typing {
-  border-color: rgb(186 142 231 / 25%);
-}
-
-.member-speaking {
-  border-color: rgb(112 217 162 / 40%);
-  box-shadow: 0 0 30px rgb(35 145 91 / 10%);
-}
-
-.member-error {
-  border-color: rgb(244 119 119 / 26%);
-}
-
-.member-head {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.status-pill {
-  padding: 5px 7px;
-  border-radius: 999px;
-  background: rgb(255 255 255 / 4%);
-  color: #718278;
-  font-size: 9px;
-}
-
-.reading-animation,
-.dot-animation,
-.voice-animation {
-  min-height: 38px;
-  margin-top: 15px;
-}
-
-.reading-animation > span,
-.dot-animation > span,
-.voice-animation > span {
-  color: #73867b;
-  font-size: 10px;
-}
-
-.reading-animation div {
-  position: relative;
-  height: 3px;
-  margin-top: 10px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgb(255 255 255 / 5%);
-}
-
-.reading-animation div::after {
-  position: absolute;
-  width: 35%;
-  height: 100%;
-  border-radius: 999px;
-  background: #6da4d6;
-  content: "";
-  animation: scan 1.1s linear infinite;
-}
-
-.dot-animation,
-.voice-animation {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.dot-animation i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #e1b45e;
-  animation: bounce 1s ease-in-out infinite;
-}
-
-.member-typing .dot-animation i {
-  background: #ba8ee7;
-}
-
-.dot-animation i:nth-child(2),
-.voice-animation i:nth-child(2) {
-  animation-delay: 0.12s;
-}
-
-.dot-animation i:nth-child(3),
-.voice-animation i:nth-child(3) {
-  animation-delay: 0.24s;
-}
-
-.dot-animation span,
-.voice-animation span {
-  margin-left: 5px;
-}
-
-.voice-animation i {
-  width: 3px;
-  height: 7px;
-  border-radius: 999px;
-  background: #70d9a2;
-  animation: voice 0.7s ease-in-out infinite;
-}
-
-.voice-animation i:nth-child(4) {
-  animation-delay: 0.36s;
-}
-
-.voice-animation i:nth-child(5) {
-  animation-delay: 0.48s;
-}
-
-.member-summary {
-  display: -webkit-box;
-  margin: 12px 0 0;
-  overflow: hidden;
-  color: #92a399;
-  font-size: 10px;
-  line-height: 1.5;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-}
-
-.chat-window,
-.conclusion,
-.composer {
-  margin-top: 18px;
-  border: 1px solid rgb(255 255 255 / 7%);
-  border-radius: 17px;
-  background: rgb(255 255 255 / 2%);
-}
-
-.chat-window {
-  overflow: hidden;
-}
-
-.chat-header {
-  padding: 17px;
-  border-bottom: 1px solid rgb(255 255 255 / 6%);
-}
-
-.chat-header > span {
-  color: #5e7066;
-  font-size: 9px;
-}
-
-.chat-list {
-  display: grid;
-  gap: 15px;
-  min-height: 320px;
-  max-height: 680px;
-  overflow-y: auto;
-  padding: 18px;
-}
-
-.chat-row {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
-  gap: 10px;
-  max-width: 88%;
-}
-
-.chat-row.chat-user {
-  margin-left: auto;
-  grid-template-columns: minmax(0, 1fr) 38px;
-}
-
-.chat-row.chat-user .chat-avatar {
-  grid-column: 2;
-  grid-row: 1;
-}
-
-.chat-row.chat-user .bubble {
-  grid-column: 1;
-  grid-row: 1;
-  border-radius: 14px 0 14px 14px;
-}
-
-.chat-row.chairman {
-  max-width: 96%;
-  margin: 4px auto;
-}
-
-.chat-avatar {
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-}
-
-.bubble {
-  padding: 14px;
-  border: 1px solid rgb(255 255 255 / 6%);
-  border-radius: 0 14px 14px;
-  background: #091511;
-}
-
-.chat-reply .bubble {
-  border-color: rgb(112 217 162 / 10%);
-}
-
-.chat-chairman .bubble {
-  border-color: rgb(112 217 162 / 20%);
-  background:
-    linear-gradient(135deg, rgb(44 138 97 / 8%), transparent),
-    #091511;
-}
-
-.bubble-meta {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.bubble-meta strong {
-  font-size: 11px;
-}
-
-.bubble-meta span,
-.bubble-meta small {
-  color: #5f7167;
-  font-size: 9px;
-}
-
-.bubble-meta small {
-  margin-left: auto;
-}
-
-.bubble > p {
-  margin: 11px 0;
-  color: #a3b3aa;
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-.bubble-recommendation {
-  padding: 11px;
-  border: 1px solid rgb(112 217 162 / 10%);
-  border-radius: 10px;
-  background: rgb(112 217 162 / 4%);
-}
-
-.bubble-recommendation span {
-  display: block;
-  color: #6ba685;
-  font-size: 8px;
-  font-weight: 850;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.bubble-recommendation strong {
-  display: block;
-  margin-top: 6px;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.confidence {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 9px;
-  align-items: center;
-  margin-top: 10px;
-  color: #61736a;
-  font-size: 9px;
-}
-
-.confidence > div {
-  height: 4px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgb(255 255 255 / 5%);
-}
-
-.confidence i {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #3b8f65, #70d9a2);
-}
-
-.empty-chat {
-  display: grid;
-  min-height: 280px;
-  place-items: center;
-  align-content: center;
-  text-align: center;
-}
-
-.empty-chat > div {
-  color: #4d5e55;
-  font-size: 30px;
-}
-
-.empty-chat h3 {
-  margin: 10px 0 5px;
-  font-size: 12px;
-}
-
-.empty-chat p {
-  max-width: 350px;
-  margin: 0;
-  color: #596b61;
-  font-size: 10px;
-  line-height: 1.6;
-}
-
-.conclusion {
-  padding: 19px;
-  border-color: rgb(112 217 162 / 14%);
-  background:
-    linear-gradient(135deg, rgb(44 138 97 / 8%), transparent),
-    rgb(255 255 255 / 2%);
-}
-
-.conclusion > header {
-  gap: 11px;
-}
-
-.chairman-icon {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  border-radius: 13px;
-  background: rgb(112 217 162 / 9%);
-  color: #79d4a3;
-  font-size: 21px;
-}
-
-.conclusion header > div:nth-child(2) {
-  flex: 1;
-}
-
-.conclusion header h2 {
-  margin: 0;
-}
-
-.conclusion header > span {
-  padding: 6px 8px;
-  border-radius: 999px;
-  background: rgb(112 217 162 / 7%);
-  color: #75c99a;
-  font-size: 9px;
-}
-
-.conclusion > h3 {
-  margin: 18px 0;
-  font-size: 19px;
-  line-height: 1.4;
-}
-
-.action {
-  padding: 13px;
-  border: 1px solid rgb(112 217 162 / 11%);
-  border-radius: 11px;
-  background: rgb(112 217 162 / 4%);
-}
-
-.action span {
-  color: #6aa684;
-  font-size: 8px;
-  font-weight: 850;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.action strong {
-  display: block;
-  margin-top: 6px;
-}
-
-.conclusion > p {
-  color: #91a399;
-  line-height: 1.7;
-}
-
-.conclusion-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 11px;
-}
-
-.conclusion-grid section {
-  padding: 12px;
-  border: 1px solid rgb(255 255 255 / 6%);
-  border-radius: 11px;
-}
-
-.conclusion-grid h4 {
-  margin: 0;
-  font-size: 11px;
-}
-
-.conclusion-grid ul {
-  padding-left: 17px;
-  color: #87998f;
-  font-size: 10px;
-  line-height: 1.6;
-}
-
-.composer {
-  padding: 16px;
-}
-
-
-
-.composer textarea {
-  width: 100%;
-  margin-top: 10px;
-  padding: 13px;
-  border: 1px solid rgb(255 255 255 / 7%);
-  border-radius: 11px;
-  outline: none;
-  resize: vertical;
-  background: #08130f;
-  color: #eef6f1;
-  line-height: 1.6;
-}
-
-.composer textarea:focus {
-  border-color: rgb(112 217 162 / 30%);
-  box-shadow: 0 0 0 3px rgb(112 217 162 / 6%);
-}
-
-.composer footer {
-  margin-top: 11px;
-}
-
-.composer footer p {
-  margin: 0;
-  color: #5b6d63;
-  font-size: 9px;
-}
-
-.composer footer button {
-  display: inline-flex;
-  gap: 7px;
-  align-items: center;
-  padding: 10px 13px;
-  border: 0;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #2c8a61, #225f46);
-  cursor: pointer;
-  font-weight: 750;
-}
-
-.composer footer button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-
-.error {
-  padding: 10px;
-  border: 1px solid rgb(244 119 119 / 15%);
-  border-radius: 10px;
-  background: rgb(244 119 119 / 5%);
-  color: #d78484;
-  font-size: 10px;
-}
-
-.right-panel {
-  padding: 26px 20px;
-  border-left: 1px solid rgb(210 235 222 / 7%);
-  background: rgb(4 11 9 / 48%);
-}
-
-.chairman-card {
-  display: grid;
-  min-height: 180px;
-  place-items: center;
-  align-content: center;
-  border: 1px solid rgb(255 255 255 / 7%);
-  border-radius: 15px;
-  background: rgb(255 255 255 / 2%);
-  text-align: center;
-}
-
-.chairman-avatar {
-  display: grid;
-  width: 52px;
-  height: 52px;
-  place-items: center;
-  border: 1px solid rgb(112 217 162 / 16%);
-  border-radius: 50%;
-  background: rgb(112 217 162 / 7%);
-  color: #79d4a3;
-  font-size: 24px;
-}
-
-.chairman-card strong {
-  margin-top: 10px;
-}
-
-.chairman-card small {
-  margin-top: 4px;
-  color: #5d6f65;
-}
-
-.chairman-pulse {
-  display: flex;
-  gap: 4px;
-  margin-top: 12px;
-}
-
-.chairman-pulse span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #70d9a2;
-  animation: bounce 1s ease-in-out infinite;
-}
-
-.chairman-pulse span:nth-child(2) {
-  animation-delay: 0.12s;
-}
-
-.chairman-pulse span:nth-child(3) {
-  animation-delay: 0.24s;
-}
-
-.flow {
-  margin-top: 18px;
-}
-
-.flow article {
-  display: grid;
-  grid-template-columns: 28px 1fr;
-  gap: 9px;
-  padding: 11px 0;
-  opacity: 0.4;
-}
-
-.flow article.active {
-  opacity: 1;
-}
-
-.flow article > span {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border: 1px solid rgb(255 255 255 / 7%);
-  border-radius: 50%;
-  color: #61736a;
-  font-size: 9px;
-}
-
-.flow article.active > span {
-  border-color: rgb(112 217 162 / 25%);
-  background: rgb(112 217 162 / 6%);
-  color: #75c99a;
-}
-
-.flow strong,
-.flow small {
-  display: block;
-}
-
-.flow strong {
-  font-size: 11px;
-}
-
-.flow small {
-  margin-top: 3px;
-  color: #5c6e64;
-  font-size: 9px;
-  line-height: 1.4;
-}
-
-@keyframes scan {
-  from {
-    left: -35%;
-  }
-
-  to {
-    left: 100%;
-  }
-}
-
-@keyframes bounce {
-  0%,
-  100% {
-    opacity: 0.3;
-    transform: translateY(0);
-  }
-
-  50% {
-    opacity: 1;
-    transform: translateY(-4px);
-  }
-}
-
-@keyframes voice {
-  0%,
-  100% {
-    height: 6px;
-  }
-
-  50% {
-    height: 19px;
-  }
-}
-
-
-@media (max-width: 1050px) {
-  .layout {
-    grid-template-columns: 1fr;
-  }
-
-  .right-panel {
-    border-top: 1px solid rgb(210 235 222 / 7%);
-    border-left: 0;
-  }
-}
-
-@media (max-width: 850px) {
-  .app {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    position: static;
-    height: auto;
-  }
-
-  .sidebar-members,
-  .local-status {
-    display: none;
-  }
-
-  .member-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 620px) {
-  .topbar,
-  .status-board > header,
-  .composer footer {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .topbar,
-  .main-column,
-  .right-panel {
-    padding-right: 15px;
-    padding-left: 15px;
-  }
-
-  .topbar-actions {
-    justify-content: space-between;
-  }
-
-  .chat-row {
-    max-width: 100%;
-  }
-
-  .conclusion-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.chat-window .composer {
-  margin-top: 0;
-  border-radius: 0;
-  border-width: 1px 0 0;
-}
-
-.composer-label {
   color: inherit;
-  font-weight: 600;
 }
 
-.chat-row.chat-user .bubble {
-  background: #213044;
-  border-color: #3b526c;
+.settings { position: relative; }
+.settings > summary { color: #585851; }
+.settings-panel {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 12px);
+  right: 0;
+  width: min(230px, 75vw);
+  padding: 16px;
+  border: 1px solid #e7e4dd;
+  border-radius: 12px;
+  background: #fffefa;
+  box-shadow: 0 8px 24px #25252212;
 }
+.settings-panel select { display: block; margin-top: 6px; width: 100%; }
+.settings-panel fieldset { margin: 14px 0; padding: 0; border: 0; }
+.settings-panel legend { margin-bottom: 6px; }
+.choice { display: flex; align-items: center; gap: .5rem; margin: 4px 0; }
+.settings-panel small { color: #5e5d55; }
 
-.bubble > p {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.timeline { overflow-y: auto; padding: 18px 16px; }
+.welcome {
+  display: grid;
+  align-content: center;
+  min-height: 100%;
+  text-align: center;
 }
+.welcome h1 { margin: 0; font-size: clamp(1.6rem, 4vw, 2.5rem); font-weight: 650; letter-spacing: -.04em; }
+.welcome p { color: #5e5d55; margin: .65rem auto; max-width: 30rem; line-height: 1.55; }
+.thread, .composer { width: min(100%, 760px); margin-inline: auto; }
 
-button:disabled {
-  cursor: not-allowed;
+.message { display: flex; align-items: flex-start; gap: 12px; padding: 16px 0; }
+.message + .message { border-top: 1px solid #ebe8e0; }
+.content { min-width: 0; flex: 1; }
+.content p, .content li { line-height: 1.55; overflow-wrap: anywhere; }
+.content p { margin: 5px 0 0; white-space: pre-wrap; }
+.byline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 10px; font-size: .92rem; }
+.byline span { color: #5e5d55; font-size: .79rem; }
+.byline .revision { color: #365244; }
+.user .content { flex: initial; padding: 10px 14px; background: #eeede7; border-radius: 10px; }
+.user { flex-direction: row-reverse; }
+.user .avatar { background: #eeede7; color: #545149; }
+.avatar[data-member="plutus"] { background: #eee7dc; color: #665139; }
+.avatar[data-member="solon"] { background: #ebe6ef; color: #5a4765; }
+.chairman .content { padding: 12px 15px; background: #edf2ed; border-radius: 10px; }
+.recommendation { font-weight: 600; }
+.reasoning { margin-top: 12px; color: #494c45; font-size: .88rem; }
+.reasoning div { margin-top: 10px; }
+.reasoning ul { margin: 4px 0; padding-left: 1.35rem; }
+
+.composer-shell {
+  padding: 8px 16px max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid #e7e4dd;
+  background: #fffefa;
+}
+.activity { padding: 0 0 8px; font-size: .84rem; color: #4d5a50; }
+.activity span { display: inline-block; margin-left: 5px; }
+.input-row { display: flex; gap: 8px; align-items: flex-end; }
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 52px;
+  max-height: 23vh;
+  padding: 10px 12px;
+  resize: vertical;
+  border: 1px solid #dddad1;
+  border-radius: 9px;
+  background: #fff;
+  color: inherit;
+}
+.composer button {
+  min-height: 42px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 8px;
+  background: #375648;
+  color: white;
+  font-size: .86rem;
+  font-weight: 650;
+}
+.error { margin: 8px 0 0; color: #982b2b; font-size: .85rem; }
+
+@media (max-width: 480px) {
+  .bar, .brand, .actions { gap: 8px; }
+  .bar { padding: 10px 12px; }
+  .settings-panel { position: fixed; top: 56px; right: 12px; }
+  .message { gap: 8px; }
+  .thread .avatar { width: 27px; height: 27px; }
 }
 </style>

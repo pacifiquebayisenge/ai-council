@@ -65,11 +65,14 @@ interface CouncilChatMessage {
   replyTo: string[];
   message: string;
   recommendation?: string;
+  position?: DebateReply["position"];
   confidence?: number;
   createdAt: string;
 }
 
 interface DebateReply {
+  addressedTo: string;
+  position: "defend" | "revise" | "clarify" | "challenge";
   message: string;
   revisedRecommendation: string;
   confidence: number;
@@ -558,41 +561,30 @@ Structuur:
             participants: successfulRoundOne.map((answer) => answer.id),
           });
 
-          // RONDE 2: elk raadslid reageert op de anderen
-          for (const member of selectedCouncillors) {
+          const participants = selectedCouncillors.filter((member) =>
+            successfulRoundOne.some((answer) => answer.id === member.id),
+          );
+          const maxReplies = participants.length === 1 ? 1 : mode === "deep" ? 9 : 5;
+          let speaker: (typeof participants)[number] | undefined = participants.find((member) => member.id === "solon") ?? participants[0];
+          let replyTarget: CouncilChatMessage | undefined;
+          let lastSeenUserMessageId: string | undefined;
+
+          for (let turn = 0; speaker && turn < maxReplies; turn++) {
             if (cancelled) return;
-            const ownAnswer = successfulRoundOne.find(
-              (answer) => answer.id === member.id,
-            );
+            const member: (typeof participants)[number] = speaker;
+            const others = participants.filter((participant) => participant.id !== member.id);
+            const transcript = chatMessages.map((entry) => ({
+              speaker: entry.name,
+              message: entry.message,
+              recommendation: entry.recommendation,
+            }));
+            const latestUser = chatMessages.findLast((entry) => entry.kind === "user");
+            const newUserMessage = latestUser?.id !== lastSeenUserMessageId ? latestUser : undefined;
+            lastSeenUserMessageId = latestUser?.id;
 
-            if (!ownAnswer?.advice) {
-              continue;
-            }
+            emit("debate_status", { id: member.id, status: "thinking" });
 
-            const otherPositions = successfulRoundOne
-              .filter((answer) => answer.id !== member.id)
-              .map((answer) => ({
-                id: answer.id,
-                name: answer.name,
-                summary: answer.advice?.summary,
-                recommendation: answer.advice?.recommendation,
-                risks: answer.advice?.risks,
-                confidence: answer.advice?.confidence,
-              }));
-
-            emit("debate_status", {
-              id: member.id,
-              status: "reading" satisfies ActivityStatus,
-              targets: otherPositions.map((position) => position.id),
-            });
-
-            await delay(500);
-
-            emit("debate_status", {
-              id: member.id,
-              status: "thinking" satisfies ActivityStatus,
-            });
-
+            let addresseeId: string | undefined;
             try {
               const result = await $fetch<OllamaResponse>(
                 "http://localhost:11434/api/generate",
@@ -604,72 +596,52 @@ Structuur:
                     stream: false,
                     format: "json",
                     prompt: `
-Je bent ${member.name}, ${member.role}.
+${member.systemPrompt}
 
-Eerdere gesprekscontext:
-${previousContext}
+Vraag: ${question}
+Eerdere context: ${previousContext}
+Andere deelnemers: ${JSON.stringify(others.map(({ id, name }) => ({ id, name })))}
 
-Vraag:
-${question}
+Gesprek tot nu toe:
+${JSON.stringify(transcript)}
 
-Jouw eerste standpunt:
-${JSON.stringify(
-  {
-    summary: ownAnswer.advice.summary,
-    recommendation: ownAnswer.advice.recommendation,
-    risks: ownAnswer.advice.risks,
-    confidence: ownAnswer.advice.confidence,
-  },
-  null,
-  2,
-)}
+${replyTarget
+  ? `Reageer rechtstreeks op dit bericht van ${replyTarget.name}: ${JSON.stringify(replyTarget.message)}`
+  : "Kies een concreet argument dat nog onvoldoende is onderbouwd en spreek de auteur bij naam aan."}
+${newUserMessage ? `Betrek ook deze nieuwe bijdrage van de gebruiker in je reactie: ${JSON.stringify(newUserMessage.message)}` : ""}
 
-Andere standpunten:
-${JSON.stringify(otherPositions, null, 2)}
+Voer een debat. Citeer kort of parafraseer het argument waarop je reageert.
+Vraag om een specifieke onderbouwing, geef een tegenvoorbeeld, of bevraag een aanname.
+Als iemand jouw standpunt betwist, beantwoord die kritiek: verdedig je standpunt met redenen, verduidelijk het of herzie precies het deel dat niet meer klopt.
+Leg uit wat je overtuigde als je van mening verandert. Draag iets nieuws bij en herhaal de vorige berichten niet.
+Als je een vraag aan iemand stelt, geef diens ID als addressedTo, zodat die persoon gericht kan antwoorden.
+Gebruik "user" wanneer je je bijdrage aan de gebruiker richt. Als je alleen bent, werk dan met de tegenwerping van de gebruiker of toets een eigen aanname.
+Schrijf maximaal 120 woorden en geef alleen geldige JSON terug.
 
-Eerdere reacties in dit debat en bijdragen van de gebruiker:
-${JSON.stringify(chatMessages.filter((entry) => entry.kind !== "opening"), null, 2)}
-
-Reageer rechtstreeks op een concreet argument. Neem de nieuwste bijdrage van de gebruiker mee wanneer die relevant is.
-
-Regels:
-- Spreek een ander raadslid bij naam aan als er een ander standpunt is.
-- Zeg duidelijk waar je akkoord of niet akkoord bent.
-- Reageer op een concreet argument.
-- Pas je aanbeveling aan wanneer een argument overtuigt.
-- Maximaal 150 woorden.
-- Antwoord uitsluitend in natuurlijk Nederlands.
-- Geef uitsluitend volledige en geldige JSON terug.
-
-Structuur:
 {
-  "message": "Jouw directe reactie aan de andere raadsleden",
-  "revisedRecommendation": "Aangepaste of behouden aanbeveling",
+  "addressedTo": "ID van degene die moet antwoorden, of user",
+  "position": "defend, revise, clarify of challenge",
+  "message": "Directe reactie, met eventueel één concrete vraag",
+  "revisedRecommendation": "Nieuwe aanbeveling, of leeg als die hetzelfde blijft",
   "confidence": 75
 }
 `,
-                    options: {
-                      ...member.options,
-                      temperature: Math.min(
-                        0.65,
-                        (member.options?.temperature ?? 0.35) + 0.1,
-                      ),
-                      num_predict: mode === "deep" ? 900 : 650,
-                    },
+                    options: { ...member.options, temperature: 0.5, num_predict: 650 },
                   },
                 },
               );
 
-              emit("debate_status", {
-                id: member.id,
-                status: "typing" satisfies ActivityStatus,
-              });
-
-              await delay(450);
-
               const parsed = parseJsonResponse<DebateReply>(result.response);
+              const message = parsed.message?.trim();
+              if (!message) throw new Error("Het raadslid gaf geen inhoudelijke reactie.");
+              const addressedMember = others.find((other) => other.id === parsed.addressedTo);
+              addresseeId = addressedMember?.id;
+              const addressedTo = addresseeId ?? (parsed.addressedTo === "user" ? "user" : undefined);
+              const position = ["defend", "revise", "clarify", "challenge"].includes(parsed.position)
+                ? parsed.position
+                : undefined;
 
-              const replyMessage: CouncilChatMessage = {
+              const reply: CouncilChatMessage = {
                 id: crypto.randomUUID(),
                 councillorId: member.id,
                 name: member.name,
@@ -677,46 +649,39 @@ Structuur:
                 role: member.role,
                 round: 2,
                 kind: "reply",
-                replyTo: otherPositions.map((position) => position.id),
-                message:
-                  parsed.message?.trim() || "Geen inhoudelijke reactie.",
-                recommendation:
-                  parsed.revisedRecommendation?.trim() ||
-                  ownAnswer.advice.recommendation,
+                replyTo: addressedTo ? [addressedTo] : [],
+                message,
+                position,
+                recommendation: position === "revise" ? parsed.revisedRecommendation?.trim() : undefined,
                 confidence: clampConfidence(parsed.confidence),
                 createdAt: new Date().toISOString(),
               };
-
-              emit("debate_status", {
-                id: member.id,
-                status: "speaking" satisfies ActivityStatus,
-              });
-
-              emit("chat_message", replyMessage);
-              chatMessages.push(replyMessage);
-
-              await delay(750);
-
-              emit("debate_status", {
-                id: member.id,
-                status: "done" satisfies ActivityStatus,
-              });
+              chatMessages.push(reply);
+              emit("chat_message", reply);
+              emit("debate_status", { id: member.id, status: "done" });
+              replyTarget = reply;
             } catch (error) {
-              // Belangrijk: analyse blijft geslaagd; alleen debatreactie faalt.
-              emit("debate_status", {
-                id: member.id,
-                status: "error" satisfies ActivityStatus,
-              });
-
+              emit("debate_status", { id: member.id, status: "error" });
               emit("member_error", {
                 id: member.id,
                 phase: "debate",
-                message:
-                  error instanceof Error
-                    ? error.message
-                    : "Debatreactie mislukt.",
+                message: error instanceof Error ? error.message : "Debatreactie mislukt.",
               });
+              replyTarget = undefined;
             }
+
+            const recentSpeakers = chatMessages
+              .filter((entry) => entry.kind === "reply")
+              .slice(-3)
+              .map((entry) => entry.councillorId);
+            const sidelined = recentSpeakers.length === 3
+              ? others.find((other) => !recentSpeakers.includes(other.id))
+              : undefined;
+            const nextSpeaker: (typeof participants)[number] | undefined =
+              others.find((other) => other.id === addresseeId) ?? sidelined ?? others[0];
+            // Only the addressed speaker gets the explicit reply prompt.
+            if (replyTarget && addresseeId !== nextSpeaker?.id) replyTarget = undefined;
+            speaker = nextSpeaker;
           }
 
           if (cancelled) return;
@@ -777,7 +742,7 @@ Formuleer één praktisch eindadvies.
 
 Regels:
 - Gebruik de eerste standpunten, de reacties en de relevante bijdragen van de gebruiker.
-- Benoem wat door het debat veranderde.
+- Benoem concreet wie door welk argument van standpunt veranderde. Beschrijf ook welke bezwaren onbeantwoord bleven.
 - Maximaal drie overeenkomsten.
 - Maximaal drie meningsverschillen.
 - Maximaal vier volgende stappen.
