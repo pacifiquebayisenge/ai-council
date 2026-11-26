@@ -1,3 +1,5 @@
+import { councilModel } from "#shared/council";
+import { liveCouncils } from "../../utils/live-council";
 import { councillors } from "../../data/councillors";
 import database from "../../utils/database";
 
@@ -59,11 +61,11 @@ interface CouncilChatMessage {
   emoji: string;
   role: string;
   round: number;
-  kind: "opening" | "reply" | "chairman";
+  kind: "opening" | "reply" | "chairman" | "user";
   replyTo: string[];
   message: string;
   recommendation?: string;
-  confidence: number;
+  confidence?: number;
   createdAt: string;
 }
 
@@ -167,12 +169,12 @@ const delay = (milliseconds: number) =>
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<CouncilRequest>(event);
-  const question = body.message?.trim();
+  const question = typeof body?.message === "string" ? body.message.trim() : "";
 
-  if (!question) {
+  if (!question || question.length > 4000) {
     throw createError({
       statusCode: 400,
-      statusMessage: "Een vraag is verplicht.",
+      statusMessage: "Geef een vraag van maximaal 4000 tekens mee.",
     });
   }
 
@@ -197,6 +199,10 @@ export default defineEventHandler(async (event) => {
     const existingSession = database
       .prepare("SELECT id FROM sessions WHERE id = ?")
       .get(sessionId);
+
+    if (liveCouncils.has(sessionId)) {
+      throw createError({ statusCode: 409, message: "Deze raad is nog in overleg." });
+    }
 
     if (!existingSession) {
       throw createError({
@@ -260,7 +266,9 @@ export default defineEventHandler(async (event) => {
 
             const recentDebate = Array.isArray(metadata?.chatMessages)
               ? metadata.chatMessages
-                  .slice(-4)
+                  .filter((entry: CouncilChatMessage, index: number, entries: CouncilChatMessage[]) =>
+                    entry.kind === "user" || index >= entries.length - 4,
+                  )
                   .map(
                     (chatMessage: CouncilChatMessage) =>
                       `${chatMessage.name}: ${chatMessage.message}`,
@@ -288,6 +296,9 @@ Risicoprofiel: ${profile.riskProfile || "Niet opgegeven"}
 Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
 `.trim();
 
+  const questionId = crypto.randomUUID();
+  const questionCreatedAt = new Date().toISOString();
+
   database
     .prepare(`
       INSERT INTO messages (
@@ -301,20 +312,24 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
       VALUES (?, ?, ?, ?, ?, ?)
     `)
     .run(
-      crypto.randomUUID(),
+      questionId,
       finalSessionId,
       "user",
       question,
       null,
-      new Date().toISOString(),
+      questionCreatedAt,
     );
 
   const encoder = new TextEncoder();
+
+  let cancelled = false;
+  const request = new AbortController();
 
   return new Response(
     new ReadableStream({
       async start(controller) {
         const emit = (type: string, payload: unknown) => {
+          if (cancelled) return;
           controller.enqueue(
             encoder.encode(
               `${JSON.stringify({
@@ -326,12 +341,34 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
           );
         };
 
-        const chatMessages: CouncilChatMessage[] = []
+        const chatMessages: CouncilChatMessage[] = [];
+        let round = 1;
+        let acceptingInterjections = true;
+        liveCouncils.set(finalSessionId, (message) => {
+          if (!acceptingInterjections || cancelled) return false;
+          const entry: CouncilChatMessage = {
+            id: crypto.randomUUID(),
+            councillorId: "user",
+            name: "Jij",
+            emoji: "✎",
+            role: "",
+            round,
+            kind: "user",
+            replyTo: [],
+            message,
+            createdAt: new Date().toISOString(),
+          };
+          chatMessages.push(entry);
+          emit("chat_message", entry);
+          return true;
+        });
 
         try {
           emit("session", {
             sessionId: finalSessionId,
             question,
+            questionId,
+            questionCreatedAt,
             mode,
           });
 
@@ -353,25 +390,26 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
           });
 
           // RONDE 1: onafhankelijke analyse
-          const roundOneAnswers = await Promise.all(
-            selectedCouncillors.map(
-              async (member): Promise<CouncilAnswer> => {
-                emit("member_status", {
-                  id: member.id,
-                  phase: "analysis",
-                  status: "thinking" satisfies ActivityStatus,
-                });
+          const roundOneAnswers: CouncilAnswer[] = [];
+          for (const member of selectedCouncillors) {
+            if (cancelled) return;
+            emit("member_status", {
+              id: member.id,
+              phase: "analysis",
+              status: "thinking" satisfies ActivityStatus,
+            });
 
-                try {
-                  const result = await $fetch<OllamaResponse>(
-                    "http://localhost:11434/api/generate",
-                    {
-                      method: "POST",
-                      body: {
-                        model: member.model,
-                        stream: false,
-                        format: "json",
-                        prompt: `
+            try {
+              const result = await $fetch<OllamaResponse>(
+                "http://localhost:11434/api/generate",
+                {
+                  signal: request.signal,
+                  method: "POST",
+                  body: {
+                    model: member.model,
+                    stream: false,
+                    format: "json",
+                    prompt: `
 ${member.systemPrompt}
 
 Persoonlijke context:
@@ -383,6 +421,9 @@ ${previousContext}
 Nieuwe vraag:
 ${question}
 
+Aanvullingen van de gebruiker tijdens deze ronde:
+${JSON.stringify(chatMessages.filter((entry) => entry.kind === "user").map((entry) => entry.message))}
+
 Geef een onafhankelijke analyse vanuit jouw specialisatie.
 
 Regels:
@@ -391,7 +432,6 @@ Regels:
 - Maximaal twee voordelen en twee risico's.
 - Houd ieder punt kort.
 - Verzin geen actuele wetten, belastingen of marktgegevens.
-- Behandel de S&P 500 niet automatisch als defensief.
 - Antwoord uitsluitend in natuurlijk Nederlands.
 - Geef uitsluitend volledige en geldige JSON terug.
 
@@ -406,121 +446,121 @@ Structuur:
   "confidence": 75
 }
 `,
-                        options: {
-                          ...member.options,
-                          num_predict: mode === "deep" ? 1400 : 950,
-                        },
-                      },
+                    options: {
+                      ...member.options,
+                      num_predict: mode === "deep" ? 1400 : 950,
                     },
-                  );
+                  },
+                },
+              );
 
-                  const advice = normalizeAdvice(
-                    parseJsonResponse<StructuredAdvice>(result.response),
-                  );
+              const advice = normalizeAdvice(
+                parseJsonResponse<StructuredAdvice>(result.response),
+              );
 
-                  emit("member_status", {
-                    id: member.id,
-                    phase: "analysis",
-                    status: "typing" satisfies ActivityStatus,
-                  });
+              emit("member_status", {
+                id: member.id,
+                phase: "analysis",
+                status: "typing" satisfies ActivityStatus,
+              });
 
-                  await delay(400);
+              await delay(400);
 
-                  const openingMessage: CouncilChatMessage = {
-                    id: crypto.randomUUID(),
-                    councillorId: member.id,
-                    name: member.name,
-                    emoji: member.emoji,
-                    role: member.role,
-                    round: 1,
-                    kind: "opening",
-                    replyTo: [],
-                    message: advice.summary,
-                    recommendation: advice.recommendation,
-                    confidence: advice.confidence,
-                    createdAt: new Date().toISOString(),
-                  };
+              const openingMessage: CouncilChatMessage = {
+                id: crypto.randomUUID(),
+                councillorId: member.id,
+                name: member.name,
+                emoji: member.emoji,
+                role: member.role,
+                round: 1,
+                kind: "opening",
+                replyTo: [],
+                message: advice.summary,
+                recommendation: advice.recommendation,
+                confidence: advice.confidence,
+                createdAt: new Date().toISOString(),
+              };
 
-                  emit("member_status", {
-                    id: member.id,
-                    phase: "analysis",
-                    status: "speaking" satisfies ActivityStatus,
-                  });
+              emit("member_status", {
+                id: member.id,
+                phase: "analysis",
+                status: "speaking" satisfies ActivityStatus,
+              });
 
-                  emit("chat_message", openingMessage);
-                  chatMessages.push(openingMessage);
+              emit("chat_message", openingMessage);
+              chatMessages.push(openingMessage);
 
-                  await delay(650);
+              await delay(650);
 
-                  emit("member_result", {
-                    id: member.id,
-                    name: member.name,
-                    role: member.role,
-                    description: member.description,
-                    emoji: member.emoji,
-                    success: true,
-                    advice,
-                  });
+              emit("member_result", {
+                id: member.id,
+                name: member.name,
+                role: member.role,
+                description: member.description,
+                emoji: member.emoji,
+                success: true,
+                advice,
+              });
 
-                  emit("member_status", {
-                    id: member.id,
-                    phase: "analysis",
-                    status: "done" satisfies ActivityStatus,
-                  });
+              emit("member_status", {
+                id: member.id,
+                phase: "analysis",
+                status: "done" satisfies ActivityStatus,
+              });
 
-                  return {
-                    id: member.id,
-                    name: member.name,
-                    role: member.role,
-                    description: member.description,
-                    emoji: member.emoji,
-                    success: true,
-                    advice,
-                  };
-                } catch (error) {
-                  emit("member_status", {
-                    id: member.id,
-                    phase: "analysis",
-                    status: "error" satisfies ActivityStatus,
-                  });
+              roundOneAnswers.push({
+                id: member.id,
+                name: member.name,
+                role: member.role,
+                description: member.description,
+                emoji: member.emoji,
+                success: true,
+                advice,
+              });
+            } catch (error) {
+              emit("member_status", {
+                id: member.id,
+                phase: "analysis",
+                status: "error" satisfies ActivityStatus,
+              });
 
-                  emit("member_error", {
-                    id: member.id,
-                    phase: "analysis",
-                    message:
-                      error instanceof Error
-                        ? error.message
-                        : "Onbekende fout.",
-                  });
+              emit("member_error", {
+                id: member.id,
+                phase: "analysis",
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : "Onbekende fout.",
+              });
 
-                  return {
-                    id: member.id,
-                    name: member.name,
-                    role: member.role,
-                    description: member.description,
-                    emoji: member.emoji,
-                    success: false,
-                    advice: null,
-                    error:
-                      error instanceof Error
-                        ? error.message
-                        : "Onbekende fout.",
-                  };
-                }
-              },
-            ),
-          );
+              roundOneAnswers.push({
+                id: member.id,
+                name: member.name,
+                role: member.role,
+                description: member.description,
+                emoji: member.emoji,
+                success: false,
+                advice: null,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "Onbekende fout.",
+              });
+            }
+          }
 
           const successfulRoundOne = roundOneAnswers.filter(
             (answer) => answer.success && answer.advice,
           );
 
+          round = 2;
           emit("debate_started", {
             participants: successfulRoundOne.map((answer) => answer.id),
           });
 
           // RONDE 2: elk raadslid reageert op de anderen
           for (const member of selectedCouncillors) {
+            if (cancelled) return;
             const ownAnswer = successfulRoundOne.find(
               (answer) => answer.id === member.id,
             );
@@ -557,6 +597,7 @@ Structuur:
               const result = await $fetch<OllamaResponse>(
                 "http://localhost:11434/api/generate",
                 {
+                  signal: request.signal,
                   method: "POST",
                   body: {
                     model: member.model,
@@ -564,6 +605,9 @@ Structuur:
                     format: "json",
                     prompt: `
 Je bent ${member.name}, ${member.role}.
+
+Eerdere gesprekscontext:
+${previousContext}
 
 Vraag:
 ${question}
@@ -583,10 +627,13 @@ ${JSON.stringify(
 Andere standpunten:
 ${JSON.stringify(otherPositions, null, 2)}
 
-Reageer rechtstreeks op de andere raadsleden alsof jullie samen in een gesprek zitten.
+Eerdere reacties in dit debat en bijdragen van de gebruiker:
+${JSON.stringify(chatMessages.filter((entry) => entry.kind !== "opening"), null, 2)}
+
+Reageer rechtstreeks op een concreet argument. Neem de nieuwste bijdrage van de gebruiker mee wanneer die relevant is.
 
 Regels:
-- Noem minstens één ander raadslid bij naam.
+- Spreek een ander raadslid bij naam aan als er een ander standpunt is.
 - Zeg duidelijk waar je akkoord of niet akkoord bent.
 - Reageer op een concreet argument.
 - Pas je aanbeveling aan wanneer een argument overtuigt.
@@ -672,6 +719,13 @@ Structuur:
             }
           }
 
+          if (cancelled) return;
+          acceptingInterjections = false;
+          emit("interjections_closed", {});
+          if (!successfulRoundOne.length) {
+            throw new Error("Geen raadslid kon antwoorden. Controleer of Ollama draait en het model beschikbaar is.");
+          }
+
           let conclusion: ChairmanConclusion | null = null;
 
           if (successfulRoundOne.length) {
@@ -689,13 +743,17 @@ Structuur:
               const chairmanResult = await $fetch<OllamaResponse>(
                 "http://localhost:11434/api/generate",
                 {
+                  signal: request.signal,
                   method: "POST",
                   body: {
-                    model: "gemma3:12b",
+                    model: councilModel,
                     stream: false,
                     format: "json",
                     prompt: `
 Je bent de voorzitter van een persoonlijke AI Council.
+
+Eerdere gesprekscontext:
+${previousContext}
 
 Vraag:
 ${question}
@@ -718,7 +776,7 @@ ${JSON.stringify(chatMessages, null, 2)}
 Formuleer één praktisch eindadvies.
 
 Regels:
-- Gebruik zowel de eerste standpunten als de reacties.
+- Gebruik de eerste standpunten, de reacties en de relevante bijdragen van de gebruiker.
 - Benoem wat door het debat veranderde.
 - Maximaal drie overeenkomsten.
 - Maximaal drie meningsverschillen.
@@ -805,6 +863,7 @@ Structuur:
             }
           }
 
+          if (cancelled) return;
           const councilResponse = {
             id: crypto.randomUUID(),
             sessionId: finalSessionId,
@@ -856,8 +915,13 @@ Structuur:
               error instanceof Error ? error.message : "Onbekende fout.",
           });
         } finally {
-          controller.close();
+          liveCouncils.delete(finalSessionId);
+          if (!cancelled) controller.close();
         }
+      },
+      cancel() {
+        cancelled = true;
+        request.abort();
       },
     }),
     {

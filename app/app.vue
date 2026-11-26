@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { councilMembers, councilModel } from "#shared/council";
+
 type ActivityStatus =
   | "waiting"
   | "reading"
@@ -36,11 +38,11 @@ interface CouncilChatMessage {
   emoji: string;
   role: string;
   round: number;
-  kind: "opening" | "reply" | "chairman";
+  kind: "opening" | "reply" | "chairman" | "user";
   replyTo: string[];
   message: string;
   recommendation?: string;
-  confidence: number;
+  confidence?: number;
   createdAt: string;
 }
 
@@ -79,35 +81,12 @@ interface CouncilMember {
   answer: CouncilAnswer | null;
 }
 
-const members = ref<CouncilMember[]>([
-  {
-    id: "athena",
-    name: "Athena",
-    emoji: "🏛️",
-    role: "Strategie",
-    analysisStatus: "waiting",
-    debateStatus: "waiting",
-    answer: null,
-  },
-  {
-    id: "solon",
-    name: "Solon",
-    emoji: "⚖️",
-    role: "Kritische analyse",
-    analysisStatus: "waiting",
-    debateStatus: "waiting",
-    answer: null,
-  },
-  {
-    id: "plutus",
-    name: "Plutus",
-    emoji: "💰",
-    role: "Financiën",
-    analysisStatus: "waiting",
-    debateStatus: "waiting",
-    answer: null,
-  },
-]);
+const members = ref<CouncilMember[]>(councilMembers.map((member) => ({
+  ...member,
+  analysisStatus: "waiting",
+  debateStatus: "waiting",
+  answer: null,
+})));
 
 const message = ref("");
 const mode = ref<"quick" | "deep">("quick");
@@ -118,6 +97,8 @@ const chairmanStatus = ref<ActivityStatus>("waiting");
 const conclusion = ref<ChairmanConclusion | null>(null);
 const chatMessages = ref<CouncilChatMessage[]>([]);
 const isRunning = ref(false);
+const canInterject = ref(false);
+const isSending = ref(false);
 const errorMessage = ref("");
 const chatContainer = ref<HTMLElement | null>(null);
 
@@ -150,9 +131,11 @@ const activeSpeaker = computed(() => {
 });
 
 const followUpPlaceholder = computed(() =>
-  activeSessionId.value
-    ? "Reageer op het besluit of stel een vervolgvraag aan dezelfde raad..."
-    : "Leg een beslissing of situatie voor aan de raad...",
+  isRunning.value
+    ? "Voeg een argument of verduidelijking toe..."
+    : activeSessionId.value
+      ? "Reageer op het besluit of stel een vervolgvraag aan dezelfde raad..."
+      : "Leg een beslissing of situatie voor aan de raad...",
 );
 
 onMounted(() => {
@@ -182,7 +165,7 @@ function statusLabel(status: ActivityStatus) {
 }
 
 function visibleStatus(member: CouncilMember) {
-  if (activeRound >= 2 && member.debateStatus !== "waiting") {
+  if (activeRound.value >= 2 && member.debateStatus !== "waiting") {
     return member.debateStatus;
   }
 
@@ -220,6 +203,7 @@ function resetCurrentRun() {
 }
 
 function startNewSession() {
+  if (isRunning.value || isSending.value) return;
   activeSessionId.value = null;
   message.value = "";
   chatMessages.value = [];
@@ -256,12 +240,36 @@ async function scrollChatToBottom() {
 async function runCouncil() {
   const question = message.value.trim();
 
-  if (!question || isRunning.value) {
+  if (!question || isSending.value || question.length > 4000) {
+    return;
+  }
+
+  if (isRunning.value) {
+    if (!canInterject.value) return;
+    isSending.value = true;
+    message.value = "";
+    errorMessage.value = "";
+
+    try {
+      await $fetch("/api/council/interject", {
+        method: "POST",
+        body: { sessionId: activeSessionId.value, message: question },
+      });
+    } catch (error) {
+      message.value = [question, message.value].filter(Boolean).join("\n");
+      errorMessage.value = (error as { data?: { message?: string } }).data?.message
+        || "Je bijdrage kon niet worden verstuurd.";
+    } finally {
+      isSending.value = false;
+    }
     return;
   }
 
   resetCurrentRun();
   isRunning.value = true;
+  message.value = "";
+  let questionAccepted = false;
+  let finished = false;
 
   try {
     const response = await fetch("/api/council/stream", {
@@ -279,7 +287,8 @@ async function runCouncil() {
     });
 
     if (!response.ok || !response.body) {
-      throw new Error(`Streaming request mislukt (${response.status}).`);
+      const details = await response.json().catch(() => null);
+      throw new Error(details?.message || `De raad kon niet starten (${response.status}).`);
     }
 
     const reader = response.body.getReader();
@@ -302,21 +311,28 @@ async function runCouncil() {
           continue;
         }
 
-        await handleStreamEvent(JSON.parse(line) as StreamEvent);
+        const streamEvent = JSON.parse(line) as StreamEvent;
+        if (streamEvent.type === "session") questionAccepted = true;
+        if (streamEvent.type === "complete" || streamEvent.type === "fatal_error") finished = true;
+        await handleStreamEvent(streamEvent);
       }
     }
 
     if (buffer.trim()) {
-      await handleStreamEvent(JSON.parse(buffer) as StreamEvent);
+      const streamEvent = JSON.parse(buffer) as StreamEvent;
+      finished ||= streamEvent.type === "complete" || streamEvent.type === "fatal_error";
+      await handleStreamEvent(streamEvent);
     }
+    if (!finished) throw new Error("De verbinding met de raad werd onderbroken.");
   } catch (error) {
-    console.error(error);
+    if (!questionAccepted) message.value = [question, message.value].filter(Boolean).join("\n");
 
     errorMessage.value =
       error instanceof Error
         ? error.message
         : "De vergadering kon niet worden gestart.";
   } finally {
+    canInterject.value = false;
     isRunning.value = false;
   }
 }
@@ -326,6 +342,24 @@ async function handleStreamEvent(event: StreamEvent) {
     case "session":
       activeSessionId.value = event.payload.sessionId;
       activeRound.value = 1;
+      canInterject.value = true;
+      chatMessages.value.push({
+        id: event.payload.questionId,
+        councillorId: "user",
+        name: "Jij",
+        emoji: "✎",
+        role: "",
+        round: 0,
+        kind: "user",
+        replyTo: [],
+        message: event.payload.question,
+        createdAt: event.payload.questionCreatedAt,
+      });
+      await scrollChatToBottom();
+      break;
+
+    case "interjections_closed":
+      canInterject.value = false;
       break;
 
     case "member_status":
@@ -375,13 +409,16 @@ async function handleStreamEvent(event: StreamEvent) {
       );
       break;
 
+    case "chairman_error":
+      errorMessage.value = event.payload.message;
+      break;
+
     case "fatal_error":
       errorMessage.value = event.payload.message;
       break;
 
     case "complete":
       activeSessionId.value = event.payload.sessionId;
-      message.value = "";
       break;
   }
 }
@@ -406,7 +443,7 @@ function formatTime(value: string) {
         </span>
       </div>
 
-      <button class="new-button" type="button" @click="startNewSession">
+      <button class="new-button" type="button" :disabled="isRunning || isSending" @click="startNewSession">
         ＋ Nieuwe vergadering
       </button>
 
@@ -424,6 +461,8 @@ function formatTime(value: string) {
               visibleStatus(member),
             ),
           }"
+          :aria-pressed="selectedCouncillorIds.includes(member.id)"
+          :disabled="isRunning"
           @click="toggleMember(member.id)"
         >
           <span class="avatar">{{ member.emoji }}</span>
@@ -442,7 +481,7 @@ function formatTime(value: string) {
 
       <div class="local-status">
         <span />
-        Ollama lokaal actief
+        Ollama · {{ councilModel }}
       </div>
     </aside>
 
@@ -466,6 +505,7 @@ function formatTime(value: string) {
             <button
               type="button"
               :class="{ active: mode === 'quick' }"
+              :disabled="isRunning"
               @click="mode = 'quick'"
             >
               Snel
@@ -474,6 +514,7 @@ function formatTime(value: string) {
             <button
               type="button"
               :class="{ active: mode === 'deep' }"
+              :disabled="isRunning"
               @click="mode = 'deep'"
             >
               Grondig
@@ -484,6 +525,113 @@ function formatTime(value: string) {
 
       <div class="layout">
         <section class="main-column">
+          <section class="chat-window">
+            <header class="chat-header">
+              <div>
+                <h2>Gesprek van de raad</h2>
+              </div>
+
+              <span>{{ chatMessages.length }} berichten</span>
+            </header>
+
+            <div ref="chatContainer" class="chat-list" role="log" aria-label="Gesprek van de raad">
+              <article
+                v-for="chatMessage in chatMessages"
+                :key="chatMessage.id"
+                class="chat-row"
+                :class="[
+                  `chat-${chatMessage.kind}`,
+                  { chairman: chatMessage.kind === 'chairman' },
+                ]"
+              >
+                <div class="chat-avatar">{{ chatMessage.emoji }}</div>
+
+                <div class="bubble">
+                  <div class="bubble-meta">
+                    <strong>{{ chatMessage.name }}</strong>
+                    <span>{{ chatMessage.role }}</span>
+
+                    <small>
+                      <template v-if="chatMessage.kind !== 'user'">Ronde {{ chatMessage.round }} · </template>
+                      {{ formatTime(chatMessage.createdAt) }}
+                    </small>
+                  </div>
+
+                  <p>{{ chatMessage.message }}</p>
+
+                  <div
+                    v-if="chatMessage.recommendation"
+                    class="bubble-recommendation"
+                  >
+                    <span>
+                      {{
+                        chatMessage.kind === "chairman"
+                          ? "Eindadvies"
+                          : chatMessage.kind === "reply"
+                            ? "Bijgesteld standpunt"
+                            : "Aanbeveling"
+                      }}
+                    </span>
+
+                    <strong>{{ chatMessage.recommendation }}</strong>
+                  </div>
+
+                  <div v-if="chatMessage.confidence !== undefined" class="confidence">
+                    <span>Overtuiging</span>
+
+                    <div>
+                      <i
+                        :style="{
+                          width: `${chatMessage.confidence}%`,
+                        }"
+                      />
+                    </div>
+
+                    <strong>{{ chatMessage.confidence }}%</strong>
+                  </div>
+                </div>
+              </article>
+
+              <div v-if="!chatMessages.length" class="empty-chat">
+                <div>◎</div>
+                <h3>De vergadering is nog stil</h3>
+                <p>
+                  De eerste standpunten en alle reacties verschijnen hier als
+                  chatbubbels.
+                </p>
+              </div>
+            </div>
+            <form class="composer" @submit.prevent="runCouncil">
+              <label class="composer-label" for="council-message">
+                {{ isRunning ? "Meng je in het debat" : activeSessionId ? "Reageer op de raad" : "Stel een vraag" }}
+              </label>
+              <textarea
+                id="council-message"
+                v-model="message"
+                rows="2"
+                maxlength="4000"
+                :placeholder="followUpPlaceholder"
+                @keydown.enter.exact.prevent="runCouncil"
+              />
+              <footer>
+                <p role="status">
+                  {{ isRunning
+                    ? canInterject
+                      ? "Je bijdrage gaat mee naar de volgende spreker."
+                      : "De voorzitter rondt af. Je kunt zo een vervolgbericht sturen."
+                    : "Enter om te versturen · Shift+Enter voor een nieuwe regel" }}
+                </p>
+                <button
+                  type="submit"
+                  :disabled="isSending || (isRunning && !canInterject) || !message.trim()"
+                >
+                  {{ isSending ? "Versturen…" : activeSessionId ? "Verstuur bericht" : "Start debat" }}
+                </button>
+              </footer>
+              <p v-if="errorMessage" class="error" role="alert">{{ errorMessage }}</p>
+            </form>
+          </section>
+
           <section class="status-board">
             <header>
               <div>
@@ -572,85 +720,6 @@ function formatTime(value: string) {
             </div>
           </section>
 
-          <section class="chat-window">
-            <header class="chat-header">
-              <div>
-                <p>LIVE CHAT</p>
-                <h2>Gesprek van de raad</h2>
-              </div>
-
-              <span>{{ chatMessages.length }} berichten</span>
-            </header>
-
-            <div ref="chatContainer" class="chat-list">
-              <article
-                v-for="chatMessage in chatMessages"
-                :key="chatMessage.id"
-                class="chat-row"
-                :class="[
-                  `chat-${chatMessage.kind}`,
-                  { chairman: chatMessage.kind === 'chairman' },
-                ]"
-              >
-                <div class="chat-avatar">{{ chatMessage.emoji }}</div>
-
-                <div class="bubble">
-                  <div class="bubble-meta">
-                    <strong>{{ chatMessage.name }}</strong>
-                    <span>{{ chatMessage.role }}</span>
-
-                    <small>
-                      Ronde {{ chatMessage.round }} ·
-                      {{ formatTime(chatMessage.createdAt) }}
-                    </small>
-                  </div>
-
-                  <p>{{ chatMessage.message }}</p>
-
-                  <div
-                    v-if="chatMessage.recommendation"
-                    class="bubble-recommendation"
-                  >
-                    <span>
-                      {{
-                        chatMessage.kind === "chairman"
-                          ? "Eindadvies"
-                          : chatMessage.kind === "reply"
-                            ? "Bijgesteld standpunt"
-                            : "Aanbeveling"
-                      }}
-                    </span>
-
-                    <strong>{{ chatMessage.recommendation }}</strong>
-                  </div>
-
-                  <div class="confidence">
-                    <span>Overtuiging</span>
-
-                    <div>
-                      <i
-                        :style="{
-                          width: `${chatMessage.confidence}%`,
-                        }"
-                      />
-                    </div>
-
-                    <strong>{{ chatMessage.confidence }}%</strong>
-                  </div>
-                </div>
-              </article>
-
-              <div v-if="!chatMessages.length" class="empty-chat">
-                <div>◎</div>
-                <h3>De vergadering is nog stil</h3>
-                <p>
-                  De eerste standpunten en alle reacties verschijnen hier als
-                  chatbubbels.
-                </p>
-              </div>
-            </div>
-          </section>
-
           <section v-if="conclusion" class="conclusion">
             <header>
               <div class="chairman-icon">◇</div>
@@ -695,55 +764,8 @@ function formatTime(value: string) {
             </div>
           </section>
 
-          <form class="composer" @submit.prevent="runCouncil">
-            <div class="composer-title">
-              <span>
-                {{
-                  activeSessionId
-                    ? "Antwoord op het besluit"
-                    : "Nieuwe vraag"
-                }}
-              </span>
 
-              <small>{{ message.length }} tekens</small>
-            </div>
 
-            <textarea
-              v-model="message"
-              rows="4"
-              :placeholder="followUpPlaceholder"
-            />
-
-            <footer>
-              <p>
-                {{
-                  activeSessionId
-                    ? "Dezelfde sessie, eerdere chat en conclusie worden meegenomen."
-                    : `${selectedMembers.length} raadsleden geselecteerd.`
-                }}
-              </p>
-
-              <button
-                type="submit"
-                :disabled="isRunning || !message.trim()"
-              >
-                <span v-if="isRunning" class="loader" />
-                <span v-else>✦</span>
-
-                {{
-                  isRunning
-                    ? "Raad in overleg"
-                    : activeSessionId
-                      ? "Ga verder met het debat"
-                      : "Start vergadering"
-                }}
-              </button>
-            </footer>
-          </form>
-
-          <p v-if="errorMessage" class="error">
-            {{ errorMessage }}
-          </p>
         </section>
 
         <aside class="right-panel">
@@ -1114,7 +1136,6 @@ button {
 .status-board > header,
 .chat-header,
 .conclusion > header,
-.composer-title,
 .composer footer {
   display: flex;
   align-items: center;
@@ -1323,17 +1344,17 @@ button {
   max-width: 88%;
 }
 
-.chat-row:nth-child(even):not(.chairman) {
+.chat-row.chat-user {
   margin-left: auto;
   grid-template-columns: minmax(0, 1fr) 38px;
 }
 
-.chat-row:nth-child(even):not(.chairman) .chat-avatar {
+.chat-row.chat-user .chat-avatar {
   grid-column: 2;
   grid-row: 1;
 }
 
-.chat-row:nth-child(even):not(.chairman) .bubble {
+.chat-row.chat-user .bubble {
   grid-column: 1;
   grid-row: 1;
   border-radius: 14px 0 14px 14px;
@@ -1566,15 +1587,7 @@ button {
   padding: 16px;
 }
 
-.composer-title span {
-  font-size: 11px;
-  font-weight: 750;
-}
 
-.composer-title small {
-  color: #52635a;
-  font-size: 9px;
-}
 
 .composer textarea {
   width: 100%;
@@ -1621,14 +1634,6 @@ button {
   cursor: not-allowed;
 }
 
-.loader {
-  width: 13px;
-  height: 13px;
-  border: 2px solid rgb(255 255 255 / 24%);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: rotate 0.8s linear infinite;
-}
 
 .error {
   padding: 10px;
@@ -1782,11 +1787,6 @@ button {
   }
 }
 
-@keyframes rotate {
-  to {
-    transform: rotate(360deg);
-  }
-}
 
 @media (max-width: 1050px) {
   .layout {
@@ -1845,5 +1845,30 @@ button {
   .conclusion-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.chat-window .composer {
+  margin-top: 0;
+  border-radius: 0;
+  border-width: 1px 0 0;
+}
+
+.composer-label {
+  color: inherit;
+  font-weight: 600;
+}
+
+.chat-row.chat-user .bubble {
+  background: #213044;
+  border-color: #3b526c;
+}
+
+.bubble > p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+button:disabled {
+  cursor: not-allowed;
 }
 </style>
