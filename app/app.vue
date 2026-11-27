@@ -158,6 +158,9 @@ function handleEvent({ type, payload }: { type: string; payload: any }) {
     case "interjections_closed":
       accepting.value = false;
       break;
+    case "member_error":
+      errorMessage.value = `${payload.id} (${payload.phase}): ${payload.message}`;
+      break;
     case "chairman_error":
     case "fatal_error":
       errorMessage.value = payload.message;
