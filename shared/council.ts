@@ -1,4 +1,4 @@
-export const councilModel = "qwen2.5:7b";
+export const councilModel = "qwen3.5:9b";
 
 export const councilMembers = [
   { id: "athena", name: "Victor", emoji: "📊", role: "Analyst", model: councilModel },
