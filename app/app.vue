@@ -247,6 +247,28 @@ function onEnter(event: KeyboardEvent) {
   void submit();
 }
 
+// Render long AI responses as short, readable paragraphs without injecting HTML.
+// Respect explicit line breaks; gently break up walls of prose when needed.
+function readableParagraphs(value: string): string[] {
+  const paragraphs = value.trim().split(/\n\s*\n|\n/).map((part) => part.trim()).filter(Boolean);
+  return paragraphs.flatMap((paragraph) => {
+    if (paragraph.length <= 360 || /^[-*•\d]+[.)]?\s/.test(paragraph)) return [paragraph];
+    const sentences = paragraph.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g)?.map((sentence) => sentence.trim()).filter(Boolean);
+    if (!sentences || sentences.length < 3) return [paragraph];
+    const chunks: string[] = [];
+    let chunk = "";
+    for (const sentence of sentences) {
+      if (chunk && chunk.length + sentence.length > 290) {
+        chunks.push(chunk);
+        chunk = "";
+      }
+      chunk += (chunk ? " " : "") + sentence;
+    }
+    if (chunk) chunks.push(chunk);
+    return chunks;
+  });
+}
+
 function addressee(entry: ChatMessage) {
   const id = entry.replyTo[0];
   return id === "user" ? "You" : id ? names.get(id) : undefined;
@@ -339,7 +361,7 @@ function addressee(entry: ChatMessage) {
               <span v-else-if="entry.kind === 'reply' && addressee(entry)">→ {{ addressee(entry) }}</span>
               <span v-if="entry.position === 'revise'" class="revision">Revised position</span>
             </header>
-            <p>{{ entry.message }}</p>
+            <div class="message-body">\n              <p v-for="(paragraph, index) in readableParagraphs(entry.message)" :key="index">{{ paragraph }}</p>\n            </div>
             <p v-if="entry.followUpQuestion" class="follow-up">{{ entry.followUpQuestion }}</p>
             <p v-if="entry.recommendation && entry.recommendation !== entry.message" class="recommendation">{{ entry.recommendation }}</p>
             <details v-if="conclusions[entry.id]" class="reasoning">
@@ -525,27 +547,64 @@ button:disabled { cursor: default; opacity: .45; }
 }
 .welcome h1 { margin: 0; font-size: clamp(1.6rem, 4vw, 2.5rem); font-weight: 650; letter-spacing: -.04em; }
 .welcome p { color: #5e5d55; margin: .65rem auto; max-width: 30rem; line-height: 1.55; }
-.thread, .composer { width: min(100%, 760px); margin-inline: auto; }
+.thread, .composer { width: min(100%, 790px); margin-inline: auto; }
 
-.message { animation: enter-message 180ms ease-out; display: flex; align-items: flex-start; gap: 12px; padding: 16px 0; }
+.message {
+  animation: enter-message 180ms ease-out;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 22px 0;
+}
 .message + .message { border-top: 1px solid #ebe8e0; }
-.content { min-width: 0; flex: 1; }
-.content p, .content li { line-height: 1.55; overflow-wrap: anywhere; }
-.content p { margin: 5px 0 0; white-space: pre-wrap; }
-.byline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 10px; font-size: .92rem; }
-.byline span { color: #5e5d55; font-size: .79rem; }
+.content { min-width: 0; flex: 1; max-width: 70ch; }
+.content p, .content li {
+  line-height: 1.8;
+  overflow-wrap: break-word;
+  font-size: .97rem;
+  letter-spacing: .002em;
+}
+.message-body { margin-top: 12px; }
+.message-body p { margin: 0; white-space: pre-wrap; }
+.message-body p + p { margin-top: 1.05em; }
+.byline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; font-size: .93rem; }
+.byline strong { font-weight: 720; }
+.byline span { color: #6d6c64; font-size: .79rem; }
 .byline .revision { color: #365244; }
-.user .content { flex: initial; padding: 10px 14px; background: #eeede7; border-radius: 10px; }
 .user { flex-direction: row-reverse; }
+.user .content {
+  flex: initial;
+  max-width: min(90%, 65ch);
+  padding: 13px 17px;
+  background: #eeede7;
+  border-radius: 14px;
+}
+.user .message-body { margin-top: 7px; }
 .user .avatar { background: #eeede7; color: #545149; }
 .avatar[data-member="plutus"] { background: #eee7dc; color: #665139; }
 .avatar[data-member="solon"] { background: #ebe6ef; color: #5a4765; }
-.chairman .content { padding: 12px 15px; background: #edf2ed; border-radius: 10px; }
-.follow-up { border-left: 2px solid #abc1ad; padding-left: 10px; color: #365244; }
-.recommendation { font-weight: 600; }
-.reasoning { margin-top: 12px; color: #494c45; font-size: .88rem; }
-.reasoning div { margin-top: 10px; }
-.reasoning ul { margin: 4px 0; padding-left: 1.35rem; }
+.chairman .content { padding: 17px 20px; background: #edf2ed; border-radius: 14px; }
+.follow-up {
+  margin-top: 16px !important;
+  padding: 11px 14px;
+  border-left: 3px solid #91b6a0;
+  border-radius: 0 9px 9px 0;
+  background: #eff6f0;
+  color: #365244;
+}
+.recommendation {
+  margin-top: 14px !important;
+  padding: 11px 14px;
+  border-radius: 9px;
+  background: #f6f1e8;
+  color: #5b4b35;
+  font-weight: 600;
+}
+.reasoning { margin-top: 16px; color: #494c45; font-size: .9rem; }
+.reasoning summary { font-weight: 650; }
+.reasoning div { margin-top: 14px; }
+.reasoning ul { margin: 8px 0; padding-left: 1.35rem; }
+.reasoning li + li { margin-top: 8px; }
 
 .composer-shell {
   padding: 8px 16px max(12px, env(safe-area-inset-bottom));
