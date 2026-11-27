@@ -11,6 +11,7 @@ export interface UserContext {
   corrections: string[];
   unknowns: string[];
   latestUserMessage: string;
+  deletedKeys?: string[];
 }
 
 /** Only user-authored statements can provide evidence. Agent text is never trusted. */
