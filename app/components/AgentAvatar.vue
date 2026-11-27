@@ -23,10 +23,10 @@ let time = 0;
 let visible = true;
 let reducedMotion = false;
 const palette: Record<string, { skin: number; hair: number; shirt: number; backdrop: number; iris: number }> = {
-  athena: { skin: 0xd7a185, hair: 0x293846, shirt: 0x526f87, backdrop: 0xe6eef5, iris: 0x496979 },
-  plutus: { skin: 0xb97859, hair: 0x352728, shirt: 0xb18a54, backdrop: 0xf5ecdf, iris: 0x624a39 },
-  solon: { skin: 0xe0ad92, hair: 0x272333, shirt: 0x75668e, backdrop: 0xeee9f5, iris: 0x4f566a },
-  vera: { skin: 0x9c654e, hair: 0x202b2d, shirt: 0x9c706c, backdrop: 0xf5eae8, iris: 0x4c3a32 },
+  athena: { skin: 0xd7a185, hair: 0x554334, shirt: 0x8c9eb4, backdrop: 0xe6eef5, iris: 0x496979 },
+  plutus: { skin: 0xb97859, hair: 0x352728, shirt: 0x6ca3a0, backdrop: 0xf5ecdf, iris: 0x624a39 },
+  solon: { skin: 0xe0ad92, hair: 0xe9e5d8, shirt: 0x9c8ebc, backdrop: 0xeee9f5, iris: 0x4f566a },
+  vera: { skin: 0x9c654e, hair: 0x392a2a, shirt: 0xd39b72, backdrop: 0xf5eae8, iris: 0x4c3a32 },
   guest: { skin: 0xc9987b, hair: 0x504038, shirt: 0x638f80, backdrop: 0xe7f2ed, iris: 0x5d5143 },
   chairman: { skin: 0xc9a48a, hair: 0x636b67, shirt: 0x6a8270, backdrop: 0xe7eee9, iris: 0x5d635d },
   user: { skin: 0xd0a58a, hair: 0x53473f, shirt: 0x888078, backdrop: 0xf0eee9, iris: 0x53473f },
@@ -97,14 +97,38 @@ function build() {
   mouth = sphere(head, 0x794b46, 0, -0.55, 0.68, 0.22, 0.038, 0.04);
   sphere(head, 0xf0b5a0, -0.52, -0.38, 0.56, 0.15, 0.065, 0.035);
   sphere(head, 0xf0b5a0, 0.52, -0.38, 0.56, 0.15, 0.065, 0.035);
+  // Mythology-inspired silhouettes: visible even at thumbnail sizes.
   if (props.member === "athena") {
-    for (const x of [-0.34, 0.34]) {
-      const glass = new THREE.Mesh(new THREE.TorusGeometry(0.245, 0.022, 8, 28), new THREE.MeshStandardMaterial({ color: 0x405b6a, metalness: 0.45, roughness: 0.3 }));
-      glass.position.set(x, 0.16, 0.79);
-      glass.scale.y = 0.75;
-      head.add(glass);
+    const crown = new THREE.Mesh(new THREE.TorusGeometry(0.79, 0.065, 8, 40, Math.PI), new THREE.MeshStandardMaterial({ color: 0xc8a967, metalness: 0.55, roughness: 0.3 }));
+    crown.rotation.z = Math.PI;
+    crown.position.set(0, 0.91, 0.19);
+    head.add(crown);
+    sphere(head, 0xd4b875, 0, 1.37, 0.12, 0.16, 0.33, 0.1);
+    sphere(head, 0xd4b875, -0.42, 1.2, 0.1, 0.12, 0.21, 0.08);
+    sphere(head, 0xd4b875, 0.42, 1.2, 0.1, 0.12, 0.21, 0.08);
+  } else if (props.member === "plutus") {
+    for (const x of [-0.85, 0.85]) {
+      const wing = sphere(head, 0xf7f3e5, x, 0.85, 0.08, 0.34, 0.17, 0.08);
+      wing.rotation.z = x < 0 ? 0.55 : -0.55;
+      const feather = sphere(head, 0xe5d7b7, x * 1.15, 0.95, 0.02, 0.25, 0.1, 0.07);
+      feather.rotation.z = x < 0 ? 0.7 : -0.7;
     }
-    sphere(head, 0x405b6a, 0, 0.19, 0.82, 0.12, 0.022, 0.025);
+  } else if (props.member === "solon") {
+    sphere(head, 0xf3eee2, -0.5, -0.62, 0.5, 0.43, 0.35, 0.3);
+    sphere(head, 0xf3eee2, 0.5, -0.62, 0.5, 0.43, 0.35, 0.3);
+    sphere(head, 0xf3eee2, 0, -0.75, 0.63, 0.42, 0.36, 0.28);
+    const bolt = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.47, 4), new THREE.MeshStandardMaterial({ color: 0xf1c56c, metalness: 0.3 }));
+    bolt.position.set(0.86, 0.95, 0.2);
+    bolt.rotation.z = -0.5;
+    head.add(bolt);
+  } else if (props.member === "vera") {
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.43, 12), new THREE.MeshStandardMaterial({ color: 0xe7ac65, emissive: 0x6c2a0b, emissiveIntensity: 0.22 }));
+    flame.position.set(0.82, 1.0, 0.15);
+    flame.rotation.z = -0.28;
+    head.add(flame);
+    sphere(head, 0xe8c38f, 0, 0.93, 0.16, 0.82, 0.11, 0.63);
+  } else if (props.member === "chairman") {
+    sphere(head, 0xd4c4a0, 0, 1.24, 0.05, 0.6, 0.1, 0.34);
   }
   const resize = () => {
     if (!host.value || !renderer || !camera) return;
