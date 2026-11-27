@@ -50,6 +50,13 @@ const rememberedFacts = ref<{key:string;value:string;evidence:string}[]>([]);
 const memoryDrafts = ref<Record<string,string>>({});
 const agentModels = ref<Record<string,string>>({});
 const workspaceError = ref("");
+const health = ref("");
+async function checkHealth() {
+  try {
+    const result = await $fetch<{ollama:string;sqlite:string;requiredModel:string;requiredModelInstalled:boolean;detail:string}>("/api/council/health");
+    health.value = "Ollama: "+result.ollama+" · SQLite: "+result.sqlite+" · Required model ("+result.requiredModel+"): "+(result.requiredModelInstalled?"installed":"missing")+(result.detail?" · "+result.detail:"");
+  } catch(e) {health.value = "Diagnostic unavailable: "+String(e);}
+}
 const calcA = ref(0);
 const calcB = ref(0);
 const calcOperation = ref("add");
@@ -498,7 +505,11 @@ function addressee(entry: ChatMessage) {
             {{ sending ? "…" : sessionId ? "Send" : "Start debate" }}
           </button>
         </div>
-        <p v-if="errorMessage" class="error" role="alert">{{ errorMessage }}</p>
+        <div v-if="errorMessage" class="connection-error" role="alert">
+          <p class="error">{{ errorMessage }}</p>
+          <button type="button" @click="checkHealth">Check local connection</button>
+          <p v-if="health">{{ health }}</p>
+        </div>
       </form>
     </footer>
   </main>
@@ -772,4 +783,5 @@ button:disabled { cursor: default; opacity: .45; }
 @media(prefers-reduced-motion:reduce){.room-seat{transition:none}}
 
 .workspace{width:min(1050px,calc(100% - 24px));margin:12px auto;border:1px solid #e6e3da;border-radius:14px;background:#fffefa;max-height:38vh;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}.workspace-header{display:flex;justify-content:space-between;align-items:center;padding:10px 15px;border-bottom:1px solid #eeeae3}.workspace-header button,.workspace-tabs button,.workspace-edit button{border:1px solid #e6e3da;border-radius:8px;background:#f7f6f2;padding:7px 10px;cursor:pointer}.workspace-tabs{display:flex;gap:6px;overflow-x:auto;padding:9px 12px;border-bottom:1px solid #eeeae3}.workspace-tabs button[aria-current="page"]{background:#e4ece5;color:#355e43;font-weight:700}.workspace-body{overflow:auto;padding:12px 16px;font-size:.82rem}.workspace-body>p{color:#79766e}.workspace-item{border:1px solid #e9e5dd;border-radius:10px;padding:10px;margin:8px 0}.workspace-item p{white-space:pre-wrap;line-height:1.5}.workspace-item small{display:block;color:#817b70}.workspace-edit{display:flex;gap:6px;margin-top:8px}.workspace-edit input{min-width:0;flex:1;padding:7px;border:1px solid #e6e3da;border-radius:8px}.workspace-model{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0}.workspace-model select{max-width:65%;padding:7px;border:1px solid #e6e3da;border-radius:8px}
+.connection-error{font-size:.76rem;margin-top:7px}.connection-error button{background:transparent;border:1px solid #e1d6c7;border-radius:7px;padding:5px 8px;cursor:pointer}.connection-error p{margin:4px 0}
 </style>
