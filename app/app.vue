@@ -366,7 +366,9 @@ function addressee(entry: ChatMessage) {
               <span v-else-if="entry.kind === 'reply' && addressee(entry)">→ {{ addressee(entry) }}</span>
               <span v-if="entry.position === 'revise'" class="revision">Revised position</span>
             </header>
-            <div class="message-body">\n              <p v-for="(paragraph, index) in readableParagraphs(entry.message)" :key="index">{{ paragraph }}</p>\n            </div>
+            <div class="message-body">
+              <p v-for="(paragraph, index) in readableParagraphs(entry.message)" :key="index">{{ paragraph }}</p>
+            </div>
             <p v-if="entry.followUpQuestion" class="follow-up">{{ entry.followUpQuestion }}</p>
             <p v-if="entry.recommendation && entry.recommendation !== entry.message" class="recommendation">{{ entry.recommendation }}</p>
             <details v-if="conclusions[entry.id]" class="reasoning">
