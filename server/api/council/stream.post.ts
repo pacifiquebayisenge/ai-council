@@ -628,8 +628,9 @@ Structuur:
           // evaluates all candidates in one inexpensive structured call per turn.
           // This is not simultaneous inference: it is event-driven arbitration.
           async function chooseNextSpeaker(turn: number) {
-            if (!participants.length) return undefined;
-            if (participants.length === 1) return participants[0];
+            const firstParticipant = participants[0];
+            if (!firstParticipant) return undefined;
+            if (participants.length === 1) return firstParticipant;
             const latest = chatMessages.slice(-5).map((entry) => ({
               id: entry.councillorId,
               name: entry.name,
@@ -643,7 +644,7 @@ Structuur:
             try {
               const raw = await generateCouncilReply(
                 {
-                  model: participants[0].model,
+                  model: firstParticipant.model,
                   prompt: `You are a neutral debate floor manager, not a debater.
 Question: ${question}
 Recent events: ${JSON.stringify(latest)}
