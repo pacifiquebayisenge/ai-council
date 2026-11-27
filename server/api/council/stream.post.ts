@@ -551,7 +551,7 @@ ${question}
 User contributions during this round:
 ${JSON.stringify(chatMessages.filter((entry) => entry.kind === "user").map((entry) => entry.message))}
 
-Never treat assumptions from earlier agents as facts. If the user corrects a price, requirement or preference, discard conflicting old reasoning.\nGive an independent position from your specialist perspective. Connect it to one concrete use case from the question.
+Never treat assumptions from earlier agents as facts. The latest user statement always overrides earlier agent examples. Do not invent financial restrictions or moralize when the user asks for fun suggestions.\nGive an independent position from your specialist perspective. Connect it to one concrete use case from the question.
 Benoem de actor, wat die probeert te doen en waar de keuze in die situatie verschil maakt.
 If information is missing, state an explicit working assumption and explain what changes if it is wrong.
 
@@ -559,7 +559,7 @@ Regels:
 - Geen introductie.
 - Maximaal drie kernpunten.
 - Maximaal twee voordelen en twee risico's.
-- Houd ieder punt kort.
+- Houd ieder punt kort. Summary maximum 50 words, recommendation one sentence. Give concrete suggestions when the user asks for ideas.
 - Verzin geen actuele wetten, belastingen of marktgegevens.
 - Respond in the user's language, whether English, French, Dutch or another supported language.
 - Return only complete, valid JSON.
@@ -577,7 +577,7 @@ Structuur:
 `,
                   options: {
                     ...member.options,
-                    num_predict: mode === "deep" ? 1400 : 950,
+                    num_predict: mode === "deep" ? 650 : 450,
                   },
                   keep_alive: keepAlive,
                 },
@@ -686,7 +686,7 @@ Structuur:
             successfulRoundOne.some((answer) => answer.id === member.id),
           );
           const maxReplies =
-            participants.length === 1 ? 4 : mode === "deep" ? 20 : 10;
+            participants.length === 1 ? 2 : mode === "deep" ? 7 : 3;
           const debateFocus = [
             "Explore a concrete use case: who does what, under which constraints, and what happens step by step? Test a claim against it.",
             "Test a previously discussed use case under changed conditions. Describe the expected outcome and why another approach might do better or worse.",
@@ -733,7 +733,7 @@ Candidates: ${JSON.stringify(
                       interventions: speakCounts.get(candidate.id) ?? 0,
                     })),
                   )}
-Pick the participant with the strongest REASON to respond next. An explicit
+Pick the participant with the strongest NEW and USEFUL reason to respond next. Prefer concrete options to repeated objections. An explicit
 question or objection to a participant matters, but anyone can interrupt
 with a more important challenge. The same participant MAY speak again.
 Do not mechanically rotate or favour the least-heard participant.
@@ -831,7 +831,7 @@ ${newUserMessage ? `Also incorporate this new contribution from the user: ${JSON
 Focus for this contribution: ${focus}
 
 Before replying, check the authoritative user facts. Explicit corrections invalidate earlier assumptions; never present a hypothetical scenario as a user statement. If new user constraints invalidate earlier recommendations, revise them.\nWrite a natural reply to the person concerned. Refer to a specific statement.
-Use a concrete example with consequences or make the differences between two approaches tangible.
+Offer practical options directly relevant to the user. Avoid hypothetical budgets, invented personal circumstances and repetitive scenarios.
 Use numbers only if supplied by the user or explicitly marked as hypothetical examples.
 Avoid vague terms such as scalability, friction or complexity without explaining what actually changes.
 Leg uit wat je behoudt of herziet en waarom. Herhaal geen al afgehandeld argument.
@@ -842,12 +842,12 @@ ${
 }
 If essential personal information is missing, address a precise question to "user". You may introduce a relevant subtopic or challenge another participant without waiting for a fixed turn. Never invent facts. Reply in the user's language.
 Use "user" when asking the user a question. With only one councillor, critically examine your own reasoning and develop a counterexample.
-Develop your reasoning over two or three short paragraphs when helpful. Return only valid JSON.
+Write one concise paragraph, 40-65 words maximum. No repeated agreement, no introduction. If no new insight is available, return an empty message. Return only valid JSON.
 
 {
   "addressedTo": "ID of the intended respondent, or user",
   "position": "defend, revise, clarify of challenge",
-  "message": "Direct, detailed response with a concrete example",
+  "message": "New useful insight in 40-65 words",
   "followUpQuestion": "One precise follow-up question, or empty",
   "revisedRecommendation": "Nieuwe aanbeveling, of leeg als die hetzelfde blijft",
   "confidence": 75
@@ -934,7 +934,7 @@ Develop your reasoning over two or three short paragraphs when helpful. Return o
             speaker = participants[0];
             replyTarget = chatMessages.at(-1);
             // Pause at a meaningful question rather than manufacturing a conclusion.
-            if (pendingQuestion && turn >= Math.min(5, maxReplies - 1)) break;
+            if (pendingQuestion && turn >= Math.min(2, maxReplies - 1)) break;
           }
 
           if (cancelled) return;
@@ -1035,7 +1035,7 @@ Regels:
 - Leg uit welke aanpak past in de uitgewerkte use cases, wat verandert in het wat-als-scenario en welke voorwaarde het advies doet kantelen.
 - Maximaal drie overeenkomsten.
 - Maximaal drie meningsverschillen.
-- Maximaal vier volgende stappen.
+- Maximaal twee volgende stappen. Verdict maximum 40 words, reasoning maximum 65 words.
 - Verzin geen actuele wetten, belastingen of marktgegevens.
 - Return only complete, valid JSON.
 
@@ -1057,7 +1057,7 @@ Structuur:
                     top_k: 25,
                     repeat_penalty: 1.15,
                     num_ctx: 8192,
-                    num_predict: mode === "deep" ? 1550 : 1100,
+                    num_predict: mode === "deep" ? 750 : 550,
                   },
                   keep_alive: keepAlive,
                 },
