@@ -60,6 +60,14 @@ database.exec(`
   CREATE INDEX IF NOT EXISTS idx_open_questions_session ON council_open_questions(session_id, status);
 `);
 
+database.exec(`
+  CREATE TABLE IF NOT EXISTS council_user_context (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    context_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`);
+
 export interface StoredSession {
   id: string;
   title: string;
