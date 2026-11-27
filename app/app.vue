@@ -514,7 +514,10 @@ button:disabled { cursor: default; opacity: .45; }
   border: 1px solid #e7e4dd;
   border-radius: 11px;
   background: #fffefa;
-  transition: background 160ms, border-color 160ms;\n  min-height: 78px;\n}\n.participant strong, .participant-role, .participant-state { display: block; }
+  transition: background 160ms, border-color 160ms;
+  min-height: 78px;
+}
+.participant strong, .participant-role, .participant-state { display: block; }
 .participant strong { font-size: .85rem; }
 .participant-role, .participant-state { color: #5e5d55; font-size: .72rem; }
 .participant-state { margin-top: 3px; }
