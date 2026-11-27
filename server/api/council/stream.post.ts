@@ -32,6 +32,7 @@ interface CouncilRequest {
   mode?: CouncilMode;
   selectedCouncillorIds?: string[];
   guestModel?: string;
+  agentModels?: Record<string,string>;
   profile?: UserProfile;
 }
 
@@ -191,6 +192,25 @@ export default defineEventHandler(async (event) => {
   const selectedCouncillors = councillors.filter(({ id }) =>
     requestedIds.includes(id),
   );
+
+  // Only permit models actually installed on the local Ollama server.
+  const requestedAgentModels = body.agentModels ?? {};
+  if (Object.values(requestedAgentModels).some(value => typeof value !== "string")) {
+    throw createError({statusCode:400,message:"Invalid agent model selection."});
+  }
+  const overrides = selectedCouncillors.filter(member => requestedAgentModels[member.id]);
+  if (overrides.length) {
+    const installed = await listOllamaModels().catch(() => {
+      throw createError({statusCode:503,message:"Ollama is unavailable."});
+    });
+    for (const member of selectedCouncillors) {
+      const chosen = requestedAgentModels[member.id];
+      if (chosen) {
+        if (!installed.includes(chosen)) throw createError({statusCode:400,message:"Selected model is not installed: "+chosen});
+        member.model = chosen;
+      }
+    }
+  }
 
   if (requestedIds.includes("guest")) {
     const model = body.guestModel;
