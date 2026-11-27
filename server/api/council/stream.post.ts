@@ -6,6 +6,7 @@ import {
   listOllamaModels,
 } from "../../utils/council-ollama";
 import database from "../../utils/database";
+import { loadUserContext, storeUserContext, validateUserContext } from "../../utils/council-context";
 
 type CouncilMode = "quick" | "deep";
 type ActivityStatus =
@@ -337,40 +338,53 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
       )
       .run(finalSessionId);
   }
-  // Extract confirmed user constraints before the agents start deliberating.
-  // Corrections override older statements; agent guesses are never treated as user facts.
-  const userStatements = [
-    ...previousMessages
-      .filter((entry) => entry.role === "user")
-      .map((entry) => entry.content),
-    question,
-  ];
-  const userFactsPrompt = `You are a factual conversation state tracker. Extract ONLY constraints explicitly stated by the user. Later corrections override earlier statements. Never infer preferences, travel patterns, prices, or requirements from agent discussions. Preserve monetary amounts and distinguish monthly from total budgets. Return JSON with keys facts (array of short strings), corrections (array of short strings), unknowns (array of short strings).\nUser messages, oldest first:\n${JSON.stringify(userStatements)}`;
-  let confirmedUserContext = `User statements (newest message takes precedence on conflicts): ${JSON.stringify(userStatements)}`;
+  // Retrieve user-authored history, not the truncated mixture of agent/user messages.
+  // Keep the latest 30 messages to bound local inference time and context length.
+  const userHistory = database.prepare(`
+    SELECT content FROM messages
+    WHERE session_id = ? AND role = 'user'
+    ORDER BY created_at DESC, rowid DESC LIMIT 30
+  `).all(finalSessionId) as { content: string }[];
+  const userStatements = userHistory.reverse().map(row => row.content);
+  // The current question is already saved to messages above.
+  if (userStatements.at(-1) !== question) userStatements.push(question);
+  const priorUserContext = loadUserContext(finalSessionId);
+  const userFactsPrompt = `You are a LOCAL conversation fact tracker. Read only the user's statements.
+Extract explicit, verifiable user constraints. NEVER use agent guesses.
+Return valid JSON:
+{"facts":[{"key":"stable topic-specific key (e.g. car.budget.total)","value":"confirmed value including units","evidence":"exact contiguous quote copied from user message","messageIndex":0}],"corrections":["what the user corrected"],"unknowns":["important missing facts"]}.
+Indices are zero-based into the supplied user messages. Each fact MUST include an exact quote from its indexed message.
+Use the same key when the user changes a constraint so the newest statement wins.
+Do not mistake hypothetical examples for the user's preferences. Do not infer facts.
+Previous validated facts for continuity (only retain if still supported): ${JSON.stringify(priorUserContext?.facts ?? [])}
+User messages, oldest to newest: ${JSON.stringify(userStatements)}`;
+  let confirmedUserContext = JSON.stringify({
+    verifiedFacts: priorUserContext?.facts ?? [],
+    userStatements,
+    latestUserMessage: question,
+    instruction: "Newer user statements override earlier assumptions; never treat agent examples as user facts.",
+  });
   try {
-    const contextResult = await generateCouncilReply(
+    const rawContext = await generateCouncilReply(
       {
         model: councilModel,
         prompt: userFactsPrompt,
-        options: { temperature: 0, num_ctx: 4096, num_predict: 500 },
+        options: { temperature: 0, num_ctx: 8192, num_predict: 900 },
         keep_alive: keepAlive,
       },
       request.signal,
       () => {},
     );
-    const state = parseJsonResponse<{
-      facts?: string[];
-      corrections?: string[];
-      unknowns?: string[];
-    }>(contextResult);
+    const extracted = parseJsonResponse<unknown>(rawContext);
+    const verified = validateUserContext(extracted, userStatements);
+    storeUserContext(finalSessionId, verified);
     confirmedUserContext = JSON.stringify({
-      confirmedFacts: normalizeArray(state.facts),
-      corrections: normalizeArray(state.corrections),
-      unknowns: normalizeArray(state.unknowns),
-      latestUserMessage: question,
+      ...verified,
+      instruction: "Only facts with exact user evidence are confirmed. Correct previous arguments immediately when contradicted.",
     });
   } catch {
-    // Preserve the raw user messages rather than inventing a summary on failure.
+    // If Ollama cannot extract facts, use the raw user messages and previous verified memory.
+    // Never silently turn an agent assumption into a user fact.
   }
 
   const agentMemories = Object.fromEntries(
