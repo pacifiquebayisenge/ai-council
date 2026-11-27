@@ -191,7 +191,7 @@ export default defineEventHandler(async (event) => {
     : councillors.map(({ id }) => id);
   const selectedCouncillors = councillors.filter(({ id }) =>
     requestedIds.includes(id),
-  );
+  ).map(member => ({...member}));
 
   // Only permit models actually installed on the local Ollama server.
   const requestedAgentModels = body.agentModels ?? {};
