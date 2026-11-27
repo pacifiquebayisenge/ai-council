@@ -44,6 +44,33 @@ const activity = ref<Record<string, Activity>>({});
 const models = ref<string[]>([]);
 const guestModel = ref("");
 const modelStatus = ref("");
+const workspaceOpen = ref(false);
+const workspaceTab = ref<"ideas" | "memory" | "models" | "research" | "voice">("ideas");
+const rememberedFacts = ref<{key:string;value:string;evidence:string}[]>([]);
+const memoryDrafts = ref<Record<string,string>>({});
+const agentModels = ref<Record<string,string>>({});
+const workspaceError = ref("");
+async function refreshMemory() {
+  if (!sessionId.value) return;
+  try {
+    const data = await $fetch<{context:{facts:typeof rememberedFacts.value}|null}>("/api/council/context",{query:{sessionId:sessionId.value}});
+    rememberedFacts.value = data.context?.facts ?? [];
+    memoryDrafts.value = Object.fromEntries(rememberedFacts.value.map(f=>[f.key,f.value]));
+    workspaceError.value = "";
+  } catch(e) { workspaceError.value = String(e); }
+}
+async function mutateMemory(method:"PATCH"|"DELETE",key:string) {
+  try {
+    await $fetch("/api/council/context",{method,body:{sessionId:sessionId.value,key,value:memoryDrafts.value[key]}});
+    await refreshMemory();
+  } catch(e) { workspaceError.value = String(e); }
+}
+function openWorkspace(tab:typeof workspaceTab.value) {
+  workspaceTab.value = tab; workspaceOpen.value = true;
+  if(tab === "memory") void refreshMemory();
+  if(tab === "models") void refreshModels();
+}
+
 const guestModels = computed(() => models.value);
 const participants = computed(() => [
   { id: "user", name: "You", role: "Participant" },
@@ -88,6 +115,7 @@ async function refreshModels() {
 
 function newConversation() {
   sessionId.value = undefined;
+  rememberedFacts.value = [];
   transcript.value = [];
   conclusions.value = {};
   draft.value = "";
@@ -151,6 +179,7 @@ function handleEvent({ type, payload }: { type: string; payload: any }) {
       append(payload);
       break;
     case "chairman_result": {
+      if(workspaceOpen.value && workspaceTab.value === "memory") void refreshMemory();
       const conclusion = transcript.value.findLast(({ kind }) => kind === "chairman");
       if (conclusion) conclusions.value[conclusion.id] = payload;
       break;
@@ -213,6 +242,7 @@ async function submit() {
         mode: mode.value,
         selectedCouncillorIds: selectedIds.value,
         guestModel: guestModel.value,
+        agentModels: agentModels.value,
         profile: profile.value,
       }),
     });
@@ -320,6 +350,7 @@ function addressee(entry: ChatMessage) {
             <small v-else-if="!guestModels.length">A guest can join when an Ollama model is available.</small>
           </div>
         </details>
+        <button class="quiet" type="button" @click="openWorkspace('ideas')">Workspace</button>
         <button class="quiet" type="button" :disabled="running || sending || !sessionId" @click="newConversation">
           New conversation
         </button>
@@ -350,6 +381,41 @@ function addressee(entry: ChatMessage) {
       </div>
     </section>
 
+    <section v-if="workspaceOpen" class="workspace" aria-label="Council workspace">
+      <header class="workspace-header"><strong>Council workspace</strong><button type="button" @click="workspaceOpen=false">Close</button></header>
+      <nav class="workspace-tabs" aria-label="Workspace tabs">
+        <button v-for="tab in (['ideas','memory','models','research','voice'] as const)" :key="tab" type="button" :aria-current="workspaceTab===tab ? 'page' : undefined" @click="openWorkspace(tab)">{{ tab }}</button>
+      </nav>
+      <div class="workspace-body" v-if="workspaceTab==='ideas'">
+        <p>Live proposals, objections and revised positions.</p>
+        <div v-for="entry in transcript.filter(e=>e.kind!=='user' && e.kind!=='chairman')" :key="entry.id" class="workspace-item">
+          <strong>{{ entry.name }} · {{ entry.position==='challenge'?'Objection':entry.position==='revise'?'Changed position':entry.position==='clarify'?'Clarification':'Proposal' }}</strong>
+          <p>{{ entry.message }}</p>
+        </div>
+      </div>
+      <div class="workspace-body" v-else-if="workspaceTab==='memory'">
+        <p>Verified local memory for this conversation. Correct or delete individual facts.</p>
+        <p v-if="!sessionId">Start a conversation first.</p>
+        <p v-else-if="!rememberedFacts.length">No verified facts saved yet.</p>
+        <div v-for="fact in rememberedFacts" :key="fact.key" class="workspace-item">
+          <strong>{{ fact.key }}</strong><small>{{ fact.evidence }}</small>
+          <div class="workspace-edit"><input v-model="memoryDrafts[fact.key]" maxlength="300" :aria-label="'Edit '+fact.key" /><button type="button" @click="mutateMemory('PATCH',fact.key)">Save</button><button type="button" @click="mutateMemory('DELETE',fact.key)">Delete</button></div>
+        </div>
+      </div>
+      <div class="workspace-body" v-else-if="workspaceTab==='models'">
+        <p>Assign different installed Ollama models to councillors.</p>
+        <label v-for="member in councilMembers" :key="member.id" class="workspace-model">{{ member.name }}
+          <select v-model="agentModels[member.id]" :disabled="running">
+            <option value="">Default ({{ member.model }})</option>
+            <option v-for="model in models" :key="model" :value="model">{{ model }}</option>
+          </select>
+        </label>
+        <p>{{ modelStatus }}</p>
+      </div>
+      <div class="workspace-body" v-else-if="workspaceTab==='research'"><p>Local research tools are being built. Live web sources are not available in offline mode.</p></div>
+      <div class="workspace-body" v-else><p>Local speech synthesis and lip synchronization are planned. Browser speech voices are not guaranteed to work offline.</p></div>
+      <p v-if="workspaceError" class="error">{{ workspaceError }}</p>
+    </section>
     <div ref="chat" class="timeline" role="log" aria-label="Council discussion">
       <div v-if="!transcript.length" class="welcome">
         <h1>What would you like to discuss?</h1>
@@ -685,4 +751,5 @@ button:disabled { cursor: default; opacity: .45; }
 @media(max-width:640px){.council-room{padding:13px 10px 0}.room-stage{min-height:190px}.room-avatars{gap:8px;padding:13px 5px 65px}.room-seat{min-width:64px;max-width:76px}.room-avatar-wrap{padding:3px;border-radius:16px}.room-avatar-wrap :deep(.agent-avatar){width:54px;height:54px;border-radius:13px}.room-seat strong{font-size:.7rem}.room-role{font-size:.6rem}.room-activity{font-size:.59rem}.room-heading h2{font-size:1.05rem}.room-live{font-size:.62rem}}
 @media(prefers-reduced-motion:reduce){.room-seat{transition:none}}
 
+.workspace{width:min(1050px,calc(100% - 24px));margin:12px auto;border:1px solid #e6e3da;border-radius:14px;background:#fffefa;max-height:38vh;display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}.workspace-header{display:flex;justify-content:space-between;align-items:center;padding:10px 15px;border-bottom:1px solid #eeeae3}.workspace-header button,.workspace-tabs button,.workspace-edit button{border:1px solid #e6e3da;border-radius:8px;background:#f7f6f2;padding:7px 10px;cursor:pointer}.workspace-tabs{display:flex;gap:6px;overflow-x:auto;padding:9px 12px;border-bottom:1px solid #eeeae3}.workspace-tabs button[aria-current="page"]{background:#e4ece5;color:#355e43;font-weight:700}.workspace-body{overflow:auto;padding:12px 16px;font-size:.82rem}.workspace-body>p{color:#79766e}.workspace-item{border:1px solid #e9e5dd;border-radius:10px;padding:10px;margin:8px 0}.workspace-item p{white-space:pre-wrap;line-height:1.5}.workspace-item small{display:block;color:#817b70}.workspace-edit{display:flex;gap:6px;margin-top:8px}.workspace-edit input{min-width:0;flex:1;padding:7px;border:1px solid #e6e3da;border-radius:8px}.workspace-model{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0}.workspace-model select{max-width:65%;padding:7px;border:1px solid #e6e3da;border-radius:8px}
 </style>
