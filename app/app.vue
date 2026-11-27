@@ -326,26 +326,28 @@ function addressee(entry: ChatMessage) {
       </div>
     </header>
 
-    <section class="presence" aria-labelledby="presence-label">
-      <h2 id="presence-label">{{ participants.length }} present</h2>
-      <ul class="participants" aria-live="polite">
-        <li
-          v-for="person in participants"
-          :key="person.id"
-          class="participant"
-          :data-state="activity[person.id] || 'waiting'"
-        >
-          <AgentAvatar :member="person.id" :state="activity[person.id] || (running ? 'waiting' : 'done')" />
-          <div>
+    <section class="council-room" aria-label="Live council chamber">
+      <div class="room-heading">
+        <div><span class="room-eyebrow">THE OLYMPIAN COUNCIL</span><h2>Chamber of the gods</h2></div>
+        <span class="room-live"><span class="live-dot" />{{ running ? 'Council in session' : 'Ready to convene' }}</span>
+      </div>
+      <div class="room-stage">
+        <div class="room-ambient room-ambient-one" aria-hidden="true" />
+        <div class="room-ambient room-ambient-two" aria-hidden="true" />
+        <div class="room-avatars">
+          <div v-for="person in participants.filter(p => p.id !== 'user')" :key="person.id"
+            class="room-seat" :data-state="activity[person.id] || 'waiting'">
+            <div class="room-avatar-wrap">
+              <AgentAvatar :member="person.id" :state="activity[person.id] || (running ? 'waiting' : 'done')" />
+              <span class="room-status-light" />
+            </div>
             <strong>{{ person.name }}</strong>
-            <span class="participant-role">{{ person.role }}<template v-if="'model' in person"> · {{ person.model }}</template></span>
-            <span v-if="person.id !== 'user'" class="participant-state">
-              <span class="state-indicator" aria-hidden="true"><i /><i /><i /></span>
-              {{ running ? activityLabels[activity[person.id] || "waiting"] : activity[person.id] === "error" ? "No response" : "Present" }}
-            </span>
+            <span class="room-role">{{ person.role }}</span>
+            <span class="room-activity">{{ running ? activityLabels[activity[person.id] || 'waiting'] : 'Present' }}</span>
           </div>
-        </li>
-      </ul>
+        </div>
+        <div class="room-table" aria-hidden="true"><span class="table-orbit" /><span class="table-core">✦</span></div>
+      </div>
     </section>
 
     <div ref="chat" class="timeline" role="log" aria-label="Council discussion">
@@ -648,4 +650,37 @@ button:disabled { cursor: default; opacity: .45; }
   .message { gap: 8px; }
   .thread .avatar { width: 27px; height: 27px; }
 }
+
+/* Olympus: an ambient council chamber, with activity driven by server events. */
+.council-room {padding:18px 22px 0;background:linear-gradient(180deg,#f7f6f2 0%,#fbfaf7 100%);border-bottom:1px solid #e8e5dc}
+.room-heading {display:flex;justify-content:space-between;align-items:center;gap:12px;max-width:1050px;margin:auto}
+.room-heading h2 {font-family:Georgia,serif;font-size:1.25rem;letter-spacing:-.025em;font-weight:500;margin:3px 0 0;color:#373b3a}
+.room-eyebrow {font-size:.62rem;font-weight:750;letter-spacing:.17em;color:#93846b}
+.room-live {display:flex;align-items:center;gap:7px;font-size:.72rem;color:#77776f}
+.live-dot {width:7px;height:7px;border-radius:50%;background:#8cb79a;box-shadow:0 0 0 4px #e6f1e7}
+.room-stage {max-width:1050px;margin:12px auto 0;position:relative;min-height:205px;overflow:hidden;border:1px solid #e9e5db;border-bottom:0;border-radius:20px 20px 0 0;background:radial-gradient(ellipse at 50% 95%,#e4e8df 0%,transparent 64%),linear-gradient(140deg,#faf8f3,#f0f1ed);isolation:isolate}
+.room-ambient {position:absolute;border-radius:50%;filter:blur(28px);opacity:.55;pointer-events:none}
+.room-ambient-one {background:#e7d6b8;width:160px;height:120px;top:-75px;left:12%}
+.room-ambient-two {background:#c9dedb;width:190px;height:130px;top:-65px;right:9%}
+.room-avatars {position:relative;z-index:2;display:flex;justify-content:center;gap:clamp(8px,3vw,32px);padding:17px 16px 75px;flex-wrap:wrap}
+.room-seat {display:flex;align-items:center;flex-direction:column;gap:3px;min-width:88px;max-width:130px;position:relative;transition:transform .4s ease}
+.room-seat[data-state="speaking"] {transform:translateY(-7px)}
+.room-avatar-wrap {position:relative;display:grid;place-items:center;padding:5px;border:1px solid #e3dfd6;border-radius:25px;background:#ffffffc7;box-shadow:0 9px 25px #585e4c15;transition:box-shadow .3s,border-color .3s}
+.room-avatar-wrap :deep(.agent-avatar) {width:76px;height:76px;border-radius:19px}
+.room-seat[data-state="thinking"] .room-avatar-wrap {border-color:#b4c5e6;box-shadow:0 0 0 4px #dce5f055}
+.room-seat[data-state="typing"] .room-avatar-wrap {border-color:#a8d0b6;box-shadow:0 0 0 4px #d9ecdf88}
+.room-seat[data-state="speaking"] .room-avatar-wrap {border-color:#d7b982;box-shadow:0 0 0 5px #e8d4ad70}
+.room-status-light {position:absolute;right:1px;bottom:2px;width:11px;height:11px;border:2px solid #fff;border-radius:50%;background:#a5b4a7}
+.room-seat[data-state="thinking"] .room-status-light {background:#91a9dd}
+.room-seat[data-state="typing"] .room-status-light {background:#77bc91}
+.room-seat[data-state="speaking"] .room-status-light {background:#dfae5c}
+.room-seat strong {font-size:.8rem;color:#343b38;margin-top:4px}
+.room-role {font-size:.65rem;color:#8b8981}
+.room-activity {font-size:.65rem;color:#667d70;font-weight:600;min-height:1em}
+.room-table {position:absolute;z-index:1;bottom:-76px;left:50%;transform:translateX(-50%);width:min(85%,680px);height:130px;border-radius:50%;background:linear-gradient(180deg,#d5c8b1,#b8ab95);border:7px solid #e6ddca;box-shadow:0 10px 0 #a69a86,0 20px 30px #5e625b25,inset 0 0 0 2px #f4ebdb}
+.table-orbit {position:absolute;inset:15px;border:1px solid #f7efe0;border-radius:50%;opacity:.7}
+.table-core {position:absolute;top:19px;left:50%;transform:translateX(-50%);font-size:1.3rem;color:#fff5e4}
+@media(max-width:640px){.council-room{padding:13px 10px 0}.room-stage{min-height:190px}.room-avatars{gap:8px;padding:13px 5px 65px}.room-seat{min-width:64px;max-width:76px}.room-avatar-wrap{padding:3px;border-radius:16px}.room-avatar-wrap :deep(.agent-avatar){width:54px;height:54px;border-radius:13px}.room-seat strong{font-size:.7rem}.room-role{font-size:.6rem}.room-activity{font-size:.59rem}.room-heading h2{font-size:1.05rem}.room-live{font-size:.62rem}}
+@media(prefers-reduced-motion:reduce){.room-seat{transition:none}}
+
 </style>
