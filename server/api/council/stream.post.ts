@@ -377,6 +377,14 @@ User messages, oldest to newest: ${JSON.stringify(userStatements)}`;
     );
     const extracted = parseJsonResponse<unknown>(rawContext);
     const verified = validateUserContext(extracted, userStatements);
+    verified.deletedKeys = priorUserContext?.deletedKeys ?? [];
+    verified.facts = verified.facts.filter((fact) => !verified.deletedKeys?.includes(fact.key));
+    for (const fact of priorUserContext?.facts ?? []) {
+      if (fact.evidence === "[Manually corrected by user]" && !verified.deletedKeys.includes(fact.key)) {
+        verified.facts = verified.facts.filter((item) => item.key !== fact.key);
+        verified.facts.push(fact);
+      }
+    }
     storeUserContext(finalSessionId, verified);
     confirmedUserContext = JSON.stringify({
       ...verified,
