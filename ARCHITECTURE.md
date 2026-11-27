@@ -32,3 +32,15 @@ pnpm dev
 ```
 
 Ollama must be running with the configured model (currently `qwen3.5:9b`). No external API key is needed.
+
+## Workspace (implemented incrementally)
+
+- **Ideas:** Live list of agent proposals, objections and revisions, derived from the current transcript. Not yet a persistent claim/evidence ledger.
+- **Memory:** Per-session verified facts are editable and deletable via `PATCH /api/council/context` and `DELETE /api/council/context`. User edits and deleted-key exclusions survive subsequent fact extraction. Cross-session memory search is not yet implemented.
+- **Models:** Per-agent model overrides are validated against installed Ollama models for each request. Defaults remain `qwen3.5:9b`.
+- **Research:** Local deterministic arithmetic endpoint `POST /api/council/calculate` and calculator UI. Agents do not yet invoke it autonomously. Local document retrieval is pending.
+- **Voice:** Not implemented. Offline-only voice requires a locally installed TTS engine and corresponding audio-to-mouth animation; browser speech synthesis cannot guarantee local execution.
+- **Health:** `GET /api/council/health` checks local Ollama, required model and SQLite.
+- **Avatars:** An illustrated fallback is now present when the WebGL renderer fails. Full-body rigged 3D models and synchronized animations remain pending.
+
+All changes require local testing with Nuxt and Ollama before being considered production-ready.
