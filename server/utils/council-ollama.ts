@@ -23,13 +23,13 @@ export async function generateCouncilReply(
   const reply = await fetch(`${ollama}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...generation, format: "json", stream: true }),
+    body: JSON.stringify({ ...generation, format: "json", think: false, stream: true }),
     signal,
   });
 
   if (!reply.ok || !reply.body) {
     const failure = await reply.json().catch(() => null);
-    throw new Error(failure?.error || `Ollama gaf HTTP ${reply.status} terug.`);
+    throw new Error(failure?.error || `Ollama returned HTTP ${reply.status}.`);
   }
 
   const reader = reply.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -57,7 +57,7 @@ export async function generateCouncilReply(
       lines.forEach(consume);
     }
     if (!finished) consume(buffer);
-    if (!finished || !response.trim()) throw new Error("Ollama gaf geen volledig antwoord.");
+    if (!finished || !response.trim()) throw new Error("Ollama returned an incomplete or empty response.");
     return response;
   } finally {
     await reader.cancel().catch(() => {});
