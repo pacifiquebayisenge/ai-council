@@ -337,6 +337,28 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
       )
       .run(finalSessionId);
   }
+  // Extract confirmed user constraints before the agents start deliberating.
+  // Corrections override older statements; agent guesses are never treated as user facts.
+  const userStatements = [...previousMessages.filter((entry) => entry.role === "user").map((entry) => entry.content), question];
+  const userFactsPrompt = `You are a factual conversation state tracker. Extract ONLY constraints explicitly stated by the user. Later corrections override earlier statements. Never infer preferences, travel patterns, prices, or requirements from agent discussions. Preserve monetary amounts and distinguish monthly from total budgets. Return JSON with keys facts (array of short strings), corrections (array of short strings), unknowns (array of short strings).\nUser messages, oldest first:\n${JSON.stringify(userStatements)}`;
+  let confirmedUserContext = `User statements (newest message takes precedence on conflicts): ${JSON.stringify(userStatements)}`;
+  try {
+    const contextResult = await generateCouncilReply(
+      { model: councilModel, prompt: userFactsPrompt, options: { temperature: 0, num_ctx: 4096, num_predict: 500 }, keep_alive: keepAlive },
+      request.signal,
+      () => {},
+    );
+    const state = parseJsonResponse<{ facts?: string[]; corrections?: string[]; unknowns?: string[] }>(contextResult);
+    confirmedUserContext = JSON.stringify({
+      confirmedFacts: normalizeArray(state.facts),
+      corrections: normalizeArray(state.corrections),
+      unknowns: normalizeArray(state.unknowns),
+      latestUserMessage: question,
+    });
+  } catch {
+    // Preserve the raw user messages rather than inventing a summary on failure.
+  }
+
   const agentMemories = Object.fromEntries(
     selectedCouncillors.map((member) => {
       const memories = database
@@ -458,7 +480,7 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
                   prompt: `
 ${member.systemPrompt}
 
-Souvenirs personnels de cet agent: ${agentMemories[member.id] || "None"}
+AUTHORITATIVE USER FACTS (override all older debate assumptions):\n${confirmedUserContext}\n\nSouvenirs personnels de cet agent: ${agentMemories[member.id] || "None"}
 Questions encore ouvertes: ${JSON.stringify(unresolved)}
 
 Personal context:
@@ -473,7 +495,7 @@ ${question}
 User contributions during this round:
 ${JSON.stringify(chatMessages.filter((entry) => entry.kind === "user").map((entry) => entry.message))}
 
-Give an independent position from your specialist perspective. Connect it to one concrete use case from the question.
+Never treat assumptions from earlier agents as facts. If the user corrects a price, requirement or preference, discard conflicting old reasoning.\nGive an independent position from your specialist perspective. Connect it to one concrete use case from the question.
 Benoem de actor, wat die probeert te doen en waar de keuze in die situatie verschil maakt.
 If information is missing, state an explicit working assumption and explain what changes if it is wrong.
 
@@ -646,8 +668,7 @@ Structuur:
                 {
                   model: firstParticipant.model,
                   prompt: `You are a neutral debate floor manager, not a debater.
-Question: ${question}
-Recent events: ${JSON.stringify(latest)}
+Question: ${question}\nAuthoritative user facts: ${confirmedUserContext}\nRecent events: ${JSON.stringify(latest)}
 Candidates: ${JSON.stringify(participants.map((candidate) => ({
   id: candidate.id,
   name: candidate.name,
@@ -718,8 +739,7 @@ Return only JSON:
                   prompt: `
 ${member.systemPrompt}
 
-Question: ${question}
-Previous context: ${previousContext.slice(-4000)}\nMemories: ${agentMemories[member.id] || "None"}\nOpen questions: ${JSON.stringify(unresolved)}
+Question: ${question}\nAuthoritative user facts (override previous context and agent assumptions): ${confirmedUserContext}\nPrevious context: ${previousContext.slice(-4000)}\nMemories: ${agentMemories[member.id] || "None"}\nOpen questions: ${JSON.stringify(unresolved)}
 Andere deelnemers: ${JSON.stringify(others.map(({ id, name }) => ({ id, name })))}
 
 Gesprek tot nu toe:
@@ -735,7 +755,7 @@ ${newUserMessage ? `Also incorporate this new contribution from the user: ${JSON
 
 Focus for this contribution: ${focus}
 
-Write a natural reply to the person concerned. Refer to a specific statement.
+Before replying, check the authoritative user facts. Explicit corrections invalidate earlier assumptions; never present a hypothetical scenario as a user statement. If new user constraints invalidate earlier recommendations, revise them.\nWrite a natural reply to the person concerned. Refer to a specific statement.
 Use a concrete example with consequences or make the differences between two approaches tangible.
 Use numbers only if supplied by the user or explicitly marked as hypothetical examples.
 Avoid vague terms such as scalability, friction or complexity without explaining what actually changes.
@@ -910,10 +930,7 @@ You are the facilitator of a personal AI Council.
 Previous conversation context:
 ${previousContext}
 
-Question:
-${question}
-
-Eerste analyses:
+Question:\n${question}\n\nAuthoritative user facts (override outdated agent assumptions):\n${confirmedUserContext}\n\nEerste analyses:
 ${JSON.stringify(
   successfulRoundOne.map((answer) => ({
     name: answer.name,
@@ -935,7 +952,7 @@ ${JSON.stringify(
   })),
 )}
 
-Formulate one practical final recommendation.
+Use authoritative user facts over all conflicting debate claims. Reject recommendations violating confirmed constraints.\nFormulate one practical final recommendation.
 
 Regels:
 - Use initial positions, debate replies and relevant contributions from the user.
