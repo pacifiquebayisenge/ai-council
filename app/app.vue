@@ -50,6 +50,17 @@ const rememberedFacts = ref<{key:string;value:string;evidence:string}[]>([]);
 const memoryDrafts = ref<Record<string,string>>({});
 const agentModels = ref<Record<string,string>>({});
 const workspaceError = ref("");
+const calcA = ref(0);
+const calcB = ref(0);
+const calcOperation = ref("add");
+const calcResult = ref<number|null>(null);
+async function calculate() {
+  try {
+    const answer = await $fetch<{result:number}>("/api/council/calculate",{method:"POST",body:{a:calcA.value,b:calcB.value,operation:calcOperation.value}});
+    calcResult.value = answer.result; workspaceError.value = "";
+  } catch(e) {workspaceError.value = String(e);}
+}
+
 async function refreshMemory() {
   if (!sessionId.value) return;
   try {
@@ -412,7 +423,16 @@ function addressee(entry: ChatMessage) {
         </label>
         <p>{{ modelStatus }}</p>
       </div>
-      <div class="workspace-body" v-else-if="workspaceTab==='research'"><p>Local research tools are being built. Live web sources are not available in offline mode.</p></div>
+      <div class="workspace-body" v-else-if="workspaceTab==='research'">
+        <p>Offline calculator. Live websites are unavailable in local-only mode.</p>
+        <div class="workspace-edit">
+          <input v-model.number="calcA" type="number" step="any" aria-label="First number"/>
+          <select v-model="calcOperation" aria-label="Operation"><option value="add">+</option><option value="subtract">−</option><option value="multiply">×</option><option value="divide">÷</option><option value="percentage">% of</option></select>
+          <input v-model.number="calcB" type="number" step="any" aria-label="Second number"/>
+          <button type="button" @click="calculate">Calculate</button>
+        </div>
+        <p v-if="calcResult!==null" role="status">Result: {{ calcResult }}</p>
+      </div>
       <div class="workspace-body" v-else><p>Local speech synthesis and lip synchronization are planned. Browser speech voices are not guaranteed to work offline.</p></div>
       <p v-if="workspaceError" class="error">{{ workspaceError }}</p>
     </section>
