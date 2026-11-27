@@ -1,60 +1,189 @@
 <script setup lang="ts">
-defineProps<{ member: string; state?: string; size?: "small" | "large" }>();
+import * as THREE from "three";
+
+const props = withDefaults(defineProps<{ member: string; state?: string; size?: "small" | "large" }>(), {
+  state: "waiting",
+  size: "large",
+});
+const host = ref<HTMLElement | null>(null);
+let renderer: THREE.WebGLRenderer | undefined;
+let frame = 0;
+let observer: ResizeObserver | undefined;
+let scene: THREE.Scene | undefined;
+let camera: THREE.PerspectiveCamera | undefined;
+let head: THREE.Group | undefined;
+let leftEye: THREE.Group | undefined;
+let rightEye: THREE.Group | undefined;
+let leftLid: THREE.Mesh | undefined;
+let rightLid: THREE.Mesh | undefined;
+let mouth: THREE.Mesh | undefined;
+let pupils: THREE.Group[] = [];
+let brows: THREE.Mesh[] = [];
+let time = 0;
+let visible = true;
+let reducedMotion = false;
+const palette: Record<string, { skin: number; hair: number; shirt: number; backdrop: number; iris: number }> = {
+  athena: { skin: 0xd7a185, hair: 0x293846, shirt: 0x526f87, backdrop: 0xe6eef5, iris: 0x496979 },
+  plutus: { skin: 0xb97859, hair: 0x352728, shirt: 0xb18a54, backdrop: 0xf5ecdf, iris: 0x624a39 },
+  solon: { skin: 0xe0ad92, hair: 0x272333, shirt: 0x75668e, backdrop: 0xeee9f5, iris: 0x4f566a },
+  vera: { skin: 0x9c654e, hair: 0x202b2d, shirt: 0x9c706c, backdrop: 0xf5eae8, iris: 0x4c3a32 },
+  guest: { skin: 0xc9987b, hair: 0x504038, shirt: 0x638f80, backdrop: 0xe7f2ed, iris: 0x5d5143 },
+  chairman: { skin: 0xc9a48a, hair: 0x636b67, shirt: 0x6a8270, backdrop: 0xe7eee9, iris: 0x5d635d },
+  user: { skin: 0xd0a58a, hair: 0x53473f, shirt: 0x888078, backdrop: 0xf0eee9, iris: 0x53473f },
+};
+function sphere(parent: THREE.Object3D, color: number, x: number, y: number, z: number, sx: number, sy: number, sz: number, roughness = 0.9) {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 20), new THREE.MeshStandardMaterial({ color, roughness }));
+  mesh.position.set(x, y, z);
+  mesh.scale.set(sx, sy, sz);
+  parent.add(mesh);
+  return mesh;
+}
+function build() {
+  if (!host.value || renderer) return;
+  const p = palette[props.member] || palette.guest!;
+  const width = Math.max(host.value.clientWidth, 32);
+  const height = Math.max(host.value.clientHeight, 32);
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(p.backdrop);
+  camera = new THREE.PerspectiveCamera(30, width / height, 0.1, 100);
+  camera.position.set(0, 0.16, 8.4);
+  camera.lookAt(0, 0.05, 0);
+  renderer = new THREE.WebGLRenderer({ alpha: false, antialias: true, powerPreference: "low-power" });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(width, height);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.6;
+  renderer.domElement.setAttribute("aria-hidden", "true");
+  host.value.appendChild(renderer.domElement);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xb3a49b, 2.4));
+  const key = new THREE.DirectionalLight(0xffffff, 3);
+  key.position.set(-3, 5, 6);
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0xdce9ff, 1.4);
+  fill.position.set(4, 1, 4);
+  scene.add(fill);
+  head = new THREE.Group();
+  scene.add(head);
+  sphere(head, p.shirt, 0, -1.62, -0.08, 1.42, 0.87, 0.8);
+  sphere(head, p.skin, 0, -1.05, 0.13, 0.34, 0.49, 0.32);
+  sphere(head, p.skin, 0, 0.06, 0, 0.89, 1.16, 0.75);
+  sphere(head, p.skin, -0.87, -0.02, 0.01, 0.19, 0.3, 0.18);
+  sphere(head, p.skin, 0.87, -0.02, 0.01, 0.19, 0.3, 0.18);
+  // Distinctive hair silhouettes for each character.
+  sphere(head, p.hair, 0, 0.92, -0.1, 0.94, 0.46, 0.76);
+  const sidePart = props.member === "plutus" ? 0.19 : props.member === "solon" ? -0.14 : 0;
+  sphere(head, p.hair, sidePart, 0.79, 0.43, 0.8, 0.28, 0.41);
+  sphere(head, p.hair, -0.76, 0.49, -0.03, 0.19, props.member === "plutus" ? 0.84 : 0.54, 0.43);
+  sphere(head, p.hair, 0.76, 0.49, -0.03, 0.19, props.member === "plutus" ? 0.84 : 0.54, 0.43);
+  sphere(head, p.skin, 0, -0.24, 0.77, 0.18, 0.27, 0.18);
+  pupils = [];
+  for (const x of [-0.34, 0.34]) {
+    const eye = new THREE.Group();
+    eye.position.set(x, 0.16, 0.65);
+    head.add(eye);
+    sphere(eye, 0xfff9f0, 0, 0, 0, 0.22, 0.145, 0.13);
+    const pupil = new THREE.Group();
+    eye.add(pupil);
+    sphere(pupil, p.iris, 0, 0, 0.119, 0.084, 0.091, 0.038);
+    sphere(pupil, 0x1c2024, 0, 0, 0.15, 0.046, 0.058, 0.023);
+    sphere(pupil, 0xffffff, -0.025, 0.036, 0.172, 0.018, 0.018, 0.009);
+    pupils.push(pupil);
+    const lid = sphere(eye, p.skin, 0, 0.13, 0.035, 0.24, 0.025, 0.15);
+    if (x < 0) { leftEye = eye; leftLid = lid; } else { rightEye = eye; rightLid = lid; }
+    const brow = sphere(head, p.hair, x, 0.43, 0.68, 0.25, 0.046, 0.07);
+    brows.push(brow);
+  }
+  mouth = sphere(head, 0x794b46, 0, -0.55, 0.68, 0.22, 0.038, 0.04);
+  sphere(head, 0xf0b5a0, -0.52, -0.38, 0.56, 0.15, 0.065, 0.035);
+  sphere(head, 0xf0b5a0, 0.52, -0.38, 0.56, 0.15, 0.065, 0.035);
+  if (props.member === "athena") {
+    for (const x of [-0.34, 0.34]) {
+      const glass = new THREE.Mesh(new THREE.TorusGeometry(0.245, 0.022, 8, 28), new THREE.MeshStandardMaterial({ color: 0x405b6a, metalness: 0.45, roughness: 0.3 }));
+      glass.position.set(x, 0.16, 0.79);
+      glass.scale.y = 0.75;
+      head.add(glass);
+    }
+    sphere(head, 0x405b6a, 0, 0.19, 0.82, 0.12, 0.022, 0.025);
+  }
+  const resize = () => {
+    if (!host.value || !renderer || !camera) return;
+    const w = Math.max(32, host.value.clientWidth), h = Math.max(32, host.value.clientHeight);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h, false);
+  };
+  observer = new ResizeObserver(resize);
+  observer.observe(host.value);
+  const animate = () => {
+    if (!renderer || !scene || !camera || !head) return;
+    frame = requestAnimationFrame(animate);
+    if (!visible) return;
+    time += reducedMotion ? 0 : 0.016;
+    const state = props.state;
+    const thinking = state === "thinking";
+    const reading = state === "reading";
+    const typing = state === "typing";
+    const speaking = state === "speaking";
+    const targetX = thinking ? -0.13 : reading ? 0.1 : speaking ? 0.08 : 0;
+    const targetY = thinking ? -0.1 : typing ? -0.15 : reading ? -0.08 : 0;
+    head.rotation.y += (targetX + Math.sin(time * 0.62) * 0.035 - head.rotation.y) * 0.045;
+    head.rotation.x += (targetY + Math.sin(time * 0.8) * 0.022 - head.rotation.x) * 0.045;
+    head.position.y = Math.sin(time * 1.3) * 0.022;
+    const blink = Math.pow(Math.max(0, Math.sin(time * 1.75 + 1.1)), 36);
+    const eyeHeight = Math.max(0.04, 1 - blink * 0.95);
+    if (leftEye) leftEye.scale.y = eyeHeight;
+    if (rightEye) rightEye.scale.y = eyeHeight;
+    const gazeX = thinking ? -0.042 : reading ? Math.sin(time * 1.8) * 0.045 : typing ? 0.02 : 0;
+    const gazeY = thinking ? 0.035 : typing ? -0.038 : 0;
+    for (const pupil of pupils) {
+      pupil.position.x += (gazeX - pupil.position.x) * 0.09;
+      pupil.position.y += (gazeY - pupil.position.y) * 0.09;
+    }
+    for (const brow of brows) brow.position.y = 0.43 + (thinking ? 0.045 : speaking ? Math.sin(time * 5) * 0.02 : 0);
+    if (mouth) {
+      const open = speaking ? 0.04 + Math.abs(Math.sin(time * 8.5)) * 0.13 : typing ? 0.035 : 0.025;
+      mouth.scale.y += (open - mouth.scale.y) * 0.25;
+    }
+    renderer.render(scene, camera);
+  };
+  animate();
+}
+onMounted(() => {
+  reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  build();
+  document.addEventListener("visibilitychange", visibilityChange);
+});
+function visibilityChange() { visible = !document.hidden; }
+onBeforeUnmount(() => {
+  document.removeEventListener("visibilitychange", visibilityChange);
+  cancelAnimationFrame(frame);
+  observer?.disconnect();
+  renderer?.dispose();
+  renderer?.domElement.remove();
+  renderer = undefined;
+  scene?.traverse((object) => {
+    if (object instanceof THREE.Mesh) {
+      object.geometry.dispose();
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material) => material.dispose());
+    }
+  });
+});
 </script>
 
 <template>
-  <span class="portrait" :class="[member, state || 'waiting', size || 'large']" aria-hidden="true">
-    <svg viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="40" cy="40" r="38" class="halo" />
-      <path d="M8 79c2-17 13-26 32-26s30 9 32 26" class="jacket"/>
-      <path d="M33 51h14v12c-5 5-9 5-14 0V51Z" class="neck"/>
-      <ellipse cx="40" cy="34" rx="20" ry="24" class="skin"/>
-      <path v-if="member === 'athena'" d="M20 31c-2-21 9-27 24-25 13 1 18 11 16 26l-5-12-12-4-15 8-8 7Z" class="hair"/>
-      <path v-else-if="member === 'plutus'" d="M16 45c-5-24 4-39 24-39 22 0 29 16 24 39l-7-14-4-14-18 3-12 13-7 12Z" class="hair"/>
-      <path v-else-if="member === 'solon'" d="M17 35c0-22 11-30 25-30 17 0 24 12 22 32l-8-13-10-11-18 10-11 12Z" class="hair"/>
-      <path v-else-if="member === 'vera'" d="M19 29C19 13 28 7 40 7c17 0 23 10 22 24l-9-10-15-5-11 8-8 5Z" class="hair"/>
-      <path v-else d="M21 30c0-17 8-23 19-23 14 0 21 8 20 24l-9-9-12-5-18 13Z" class="hair"/>
-      <g class="eyes">
-        <path d="M29 34h7M44 34h7" stroke="#40372F" stroke-width="2.5" stroke-linecap="round"/>
-        <circle cx="33" cy="35" r="1.4" fill="#40372F"/><circle cx="48" cy="35" r="1.4" fill="#40372F"/>
-      </g>
-      <path d="M39 36l-2 8h4" stroke="#B27E67" stroke-width="1.4" stroke-linecap="round"/>
-      <path d="M34 49q6 4 12 0" stroke="#8E574D" stroke-width="1.7" stroke-linecap="round" class="mouth"/>
-      <path v-if="member === 'athena'" d="M25 34h13m4 0h13M38 34h4" stroke="#465E6B" stroke-width="1.7"/>
-      <path v-if="member === 'solon'" d="M28 29l10-2m5 0 10 2" stroke="#433B49" stroke-width="2" stroke-linecap="round"/>
-      <g class="thought"><circle cx="59" cy="13" r="3"/><circle cx="67" cy="7" r="5"/><circle cx="76" cy="3" r="3"/></g>
-      <g class="writing"><rect x="47" y="61" width="23" height="13" rx="3"/><path d="M51 65h14M51 69h10" stroke="white" stroke-width="1.5"/><path d="M65 59l7-10" stroke="#6E685E" stroke-width="3" stroke-linecap="round"/></g>
-      <g class="listening"><path d="M17 30a23 23 0 0 1 46 0" stroke-width="3"/><rect x="13" y="29" width="7" height="15" rx="3"/><rect x="60" y="29" width="7" height="15" rx="3"/></g>
-    </svg>
-    <span class="portrait-signal"><span/><span/><span/></span>
+  <span ref="host" class="agent-avatar" :class="[size, state]" role="img" :aria-label="`3D avatar: ${member}, ${state}`">
+    <span class="fallback" aria-hidden="true">{{ member.slice(0, 1).toUpperCase() }}</span>
   </span>
 </template>
 
 <style scoped>
-.portrait { --accent:#7190a1; --skin:#dfb29a; --hair:#303c48; --coat:#577384; display:inline-grid;place-items:center;position:relative;width:62px;height:62px;flex:none;border-radius:19px;background:#e7eff3;overflow:hidden;isolation:isolate;transition:background .3s,transform .3s,box-shadow .3s; }
-.portrait svg {width:100%;height:100%;overflow:visible}
-.portrait.small {width:32px;height:32px;border-radius:10px}
-.portrait.plutus {--accent:#b38a56;--skin:#bb8065;--hair:#3c2c29;--coat:#a07a53;background:#f5eadc}
-.portrait.solon {--accent:#8975a6;--skin:#d5a28b;--hair:#292537;--coat:#72638c;background:#eee9f5}
-.portrait.vera {--accent:#bc837e;--skin:#9b634f;--hair:#242d31;--coat:#9c6d68;background:#f5e9e7}
-.portrait.guest {--accent:#6a9c8b;--skin:#d1a188;--hair:#5c4940;--coat:#568c7b;background:#e5f3ed}
-.portrait.chairman {--accent:#778c7d;--skin:#cda68c;--hair:#626866;--coat:#667e6c;background:#e6ede8}
-.portrait.user {--accent:#99918a;--skin:#d6b59b;--hair:#5a5149;--coat:#827c73;background:#efede8}
-.halo {fill:var(--accent);opacity:.13}.skin,.neck {fill:var(--skin)}.hair {fill:var(--hair)}.jacket {fill:var(--coat)}
-.thought,.writing,.listening {opacity:0;transform-origin:center;transition:opacity .25s}
-.thought {fill:var(--accent)}.writing rect {fill:var(--accent)}.listening {stroke:var(--accent);fill:var(--accent)}
-.portrait-signal {position:absolute;bottom:4px;right:5px;display:none;gap:2px;align-items:end;height:10px}
-.portrait-signal span {width:3px;height:5px;background:var(--accent);border-radius:3px;animation:signal .75s ease-in-out infinite alternate}
-.portrait-signal span:nth-child(2){animation-delay:.2s}.portrait-signal span:nth-child(3){animation-delay:.4s}
-.portrait.thinking {box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent);animation:breathe 2s ease-in-out infinite}
-.portrait.thinking .thought {opacity:1;animation:float 1.8s ease-in-out infinite}
-.portrait.reading .eyes {animation:scan 1.7s ease-in-out infinite}
-.portrait.reading .listening,.portrait.waiting .listening {opacity:.8}
-.portrait.reading {animation:nod 2s ease-in-out infinite}
-.portrait.typing .writing {opacity:1;animation:scribble .7s ease-in-out infinite}
-.portrait.typing .portrait-signal,.portrait.speaking .portrait-signal {display:flex}
-.portrait.speaking .mouth {animation:talk .45s ease-in-out infinite}
-.portrait.error {filter:grayscale(.8);opacity:.65}
-@keyframes breathe {50%{transform:translateY(-2px)}}@keyframes float {50%{transform:translateY(-4px)}}@keyframes scan {50%{transform:translateX(3px)}}@keyframes nod {50%{transform:rotate(3deg)}}@keyframes scribble {50%{transform:translate(-2px,2px)}}@keyframes signal {to{height:10px}}@keyframes talk {50%{transform:translateY(2px)}}
-@media(prefers-reduced-motion:reduce){.portrait,.portrait *{animation:none!important;transition:none!important}}
+.agent-avatar { display: inline-block; position: relative; flex: none; width: 68px; height: 68px; border-radius: 20px; overflow: hidden; background: #edf0ee; isolation: isolate; }
+.agent-avatar.small { width: 34px; height: 34px; border-radius: 11px; }
+.agent-avatar :deep(canvas) { position: absolute; inset: 0; display: block; width: 100%; height: 100%; z-index: 1; }
+.fallback { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 700; color: #6d7770; }
+.agent-avatar.thinking { box-shadow: 0 0 0 2px #c6d9e9; }
+.agent-avatar.typing { box-shadow: 0 0 0 2px #b8d8c8; }
+.agent-avatar.speaking { box-shadow: 0 0 0 2px #e8d2ac; }
 </style>
