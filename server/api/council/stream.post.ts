@@ -339,16 +339,30 @@ Tijdshorizon: ${profile.timeHorizon || "Niet opgegeven"}
   }
   // Extract confirmed user constraints before the agents start deliberating.
   // Corrections override older statements; agent guesses are never treated as user facts.
-  const userStatements = [...previousMessages.filter((entry) => entry.role === "user").map((entry) => entry.content), question];
+  const userStatements = [
+    ...previousMessages
+      .filter((entry) => entry.role === "user")
+      .map((entry) => entry.content),
+    question,
+  ];
   const userFactsPrompt = `You are a factual conversation state tracker. Extract ONLY constraints explicitly stated by the user. Later corrections override earlier statements. Never infer preferences, travel patterns, prices, or requirements from agent discussions. Preserve monetary amounts and distinguish monthly from total budgets. Return JSON with keys facts (array of short strings), corrections (array of short strings), unknowns (array of short strings).\nUser messages, oldest first:\n${JSON.stringify(userStatements)}`;
   let confirmedUserContext = `User statements (newest message takes precedence on conflicts): ${JSON.stringify(userStatements)}`;
   try {
     const contextResult = await generateCouncilReply(
-      { model: councilModel, prompt: userFactsPrompt, options: { temperature: 0, num_ctx: 4096, num_predict: 500 }, keep_alive: keepAlive },
+      {
+        model: councilModel,
+        prompt: userFactsPrompt,
+        options: { temperature: 0, num_ctx: 4096, num_predict: 500 },
+        keep_alive: keepAlive,
+      },
       request.signal,
       () => {},
     );
-    const state = parseJsonResponse<{ facts?: string[]; corrections?: string[]; unknowns?: string[] }>(contextResult);
+    const state = parseJsonResponse<{
+      facts?: string[];
+      corrections?: string[];
+      unknowns?: string[];
+    }>(contextResult);
     confirmedUserContext = JSON.stringify({
       confirmedFacts: normalizeArray(state.facts),
       corrections: normalizeArray(state.corrections),
@@ -669,12 +683,14 @@ Structuur:
                   model: firstParticipant.model,
                   prompt: `You are a neutral debate floor manager, not a debater.
 Question: ${question}\nAuthoritative user facts: ${confirmedUserContext}\nRecent events: ${JSON.stringify(latest)}
-Candidates: ${JSON.stringify(participants.map((candidate) => ({
-  id: candidate.id,
-  name: candidate.name,
-  role: candidate.role,
-  interventions: speakCounts.get(candidate.id) ?? 0,
-})))}
+Candidates: ${JSON.stringify(
+                    participants.map((candidate) => ({
+                      id: candidate.id,
+                      name: candidate.name,
+                      role: candidate.role,
+                      interventions: speakCounts.get(candidate.id) ?? 0,
+                    })),
+                  )}
 Pick the participant with the strongest REASON to respond next. An explicit
 question or objection to a participant matters, but anyone can interrupt
 with a more important challenge. The same participant MAY speak again.
@@ -682,27 +698,44 @@ Do not mechanically rotate or favour the least-heard participant.
 Return only JSON:
 {"speakerId":"one candidate ID","reason":"specific argument to address","urgency":1}
 `,
-                  options: { temperature: 0.25, num_ctx: 4096, num_predict: 150 },
+                  options: {
+                    temperature: 0.25,
+                    num_ctx: 4096,
+                    num_predict: 150,
+                  },
                   keep_alive: keepAlive,
                 },
                 request.signal,
                 () => {},
               );
-              const decision = parseJsonResponse<{ speakerId: string; reason: string; urgency: number }>(raw);
-              const selected = participants.find((candidate) => candidate.id === decision.speakerId);
+              const decision = parseJsonResponse<{
+                speakerId: string;
+                reason: string;
+                urgency: number;
+              }>(raw);
+              const selected = participants.find(
+                (candidate) => candidate.id === decision.speakerId,
+              );
               if (selected) return selected;
             } catch {
               // Fall back to direct reply targeting if arbitration fails.
             }
             const addressedId = chatMessages.at(-1)?.replyTo[0];
-            return participants.find((candidate) => candidate.id === addressedId)
-              ?? participants.find((candidate) => candidate.id !== chatMessages.at(-1)?.councillorId)
-              ?? participants[0];
+            return (
+              participants.find((candidate) => candidate.id === addressedId) ??
+              participants.find(
+                (candidate) =>
+                  candidate.id !== chatMessages.at(-1)?.councillorId,
+              ) ??
+              participants[0]
+            );
           }
 
           for (let turn = 0; speaker && turn < maxReplies; turn++) {
             if (cancelled) return;
-            speaker = await chooseNextSpeaker(turn);\n            if (!speaker) break;\n            const member: (typeof participants)[number] = speaker;
+            speaker = await chooseNextSpeaker(turn);
+            if (!speaker) break;
+            const member: (typeof participants)[number] = speaker;
             speakCounts.set(member.id, (speakCounts.get(member.id) ?? 0) + 1);
             const others = participants.filter(
               (participant) => participant.id !== member.id,
