@@ -724,7 +724,7 @@ Structuur:
                 {
                   model: firstParticipant.model,
                   prompt: `You are a neutral debate floor manager, not a debater.
-Question: ${question}\nAuthoritative user facts: ${confirmedUserContext}\nRecent events: ${JSON.stringify(latest)}
+Question: ${question}\nLatest user statements: ${latestUserConstraints}\nAuthoritative user facts: ${confirmedUserContext}\nRecent events: ${JSON.stringify(latest)}
 Candidates: ${JSON.stringify(
                     participants.map((candidate) => ({
                       id: candidate.id,
@@ -814,7 +814,7 @@ Return only JSON:
                   prompt: `
 ${member.systemPrompt}
 
-Question: ${question}\nAuthoritative user facts (override previous context and agent assumptions): ${confirmedUserContext}\nPrevious context: ${previousContext.slice(-4000)}\nMemories: ${agentMemories[member.id] || "None"}\nOpen questions: ${JSON.stringify(unresolved)}
+Question: ${question}\nLatest user statements (HIGHEST PRIORITY): ${latestUserConstraints}\nAuthoritative user facts: ${confirmedUserContext}\nPrevious context (may contain hypothetical numbers): ${previousContext.slice(-1000)}\nMemories: ${agentMemories[member.id] || "None"}\nOpen questions: ${JSON.stringify(unresolved)}
 Andere deelnemers: ${JSON.stringify(others.map(({ id, name }) => ({ id, name })))}
 
 Gesprek tot nu toe:
