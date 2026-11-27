@@ -175,7 +175,10 @@ function build() {
 }
 onMounted(() => {
   reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  build();
+  try { build(); } catch (error) {
+    console.warn("3D avatar unavailable, using illustrated fallback:", error);
+    renderer?.dispose(); renderer?.domElement.remove(); renderer = undefined;
+  }
   document.addEventListener("visibilitychange", visibilityChange);
 });
 function visibilityChange() { visible = !document.hidden; }
@@ -198,7 +201,21 @@ onBeforeUnmount(() => {
 
 <template>
   <span ref="host" class="agent-avatar" :class="[size, state]" role="img" :aria-label="`3D avatar: ${member}, ${state}`">
-    <span class="fallback" aria-hidden="true">{{ member.slice(0, 1).toUpperCase() }}</span>
+    <span class="fallback" aria-hidden="true">
+      <svg viewBox="0 0 100 100" width="100%" height="100%" role="presentation">
+        <rect width="100" height="100" rx="20" :fill="member === 'solon' ? '#eae4f3' : member === 'vera' ? '#f7e9dc' : member === 'plutus' ? '#e1eeec' : '#e6edf4'" />
+        <ellipse cx="50" cy="104" rx="38" ry="34" :fill="member === 'solon' ? '#897ba8' : member === 'vera' ? '#d39b72' : member === 'plutus' ? '#6ca3a0' : '#8c9eb4'" />
+        <rect x="43" y="62" width="14" height="15" rx="5" fill="#b98269"/>
+        <ellipse cx="50" cy="43" rx="26" ry="31" :fill="member === 'vera' ? '#a66e52' : '#d8a58b'" />
+        <path d="M24 38 Q20 4 50 10 Q79 4 76 38 L71 24 Q50 32 29 24Z" :fill="member === 'solon' ? '#e5e1d7' : '#4c3b36'" />
+        <ellipse cx="40" cy="45" rx="3" ry="4" fill="#293b43"/><ellipse cx="60" cy="45" rx="3" ry="4" fill="#293b43"/>
+        <path d="M43 60 Q50 65 57 60" stroke="#794d49" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <path v-if="member === 'athena'" d="M22 22 L35 8 L50 19 L65 8 L78 22" stroke="#c5a45d" stroke-width="6" fill="none" stroke-linecap="round"/>
+        <path v-if="member === 'plutus'" d="M25 18 L7 8 L16 25 M75 18 L93 8 L84 25" stroke="#f8f3e6" stroke-width="6" fill="none" stroke-linecap="round"/>
+        <path v-if="member === 'solon'" d="M31 69 Q50 90 69 69" stroke="#f5f1e8" stroke-width="13" fill="none" stroke-linecap="round"/>
+        <path v-if="member === 'vera'" d="M76 18 Q87 8 81 3 Q99 20 82 31Z" fill="#f1b66a"/>
+      </svg>
+    </span>
   </span>
 </template>
 
@@ -206,7 +223,7 @@ onBeforeUnmount(() => {
 .agent-avatar { display: inline-block; position: relative; flex: none; width: 68px; height: 68px; border-radius: 20px; overflow: hidden; background: #edf0ee; isolation: isolate; }
 .agent-avatar.small { width: 34px; height: 34px; border-radius: 11px; }
 .agent-avatar :deep(canvas) { position: absolute; inset: 0; display: block; width: 100%; height: 100%; z-index: 1; }
-.fallback { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 700; color: #6d7770; }
+.fallback { position: absolute; inset: 0; display: grid; place-items: center; color: #6d7770; } .fallback svg { display:block; } .agent-avatar.thinking .fallback svg { animation: avatar-think 2.4s ease-in-out infinite; } .agent-avatar.speaking .fallback svg { animation: avatar-talk .7s ease-in-out infinite; } @keyframes avatar-think { 50% { transform:translateY(2px) rotate(-2deg); } } @keyframes avatar-talk { 50% { transform:translateY(-3px); } } @media(prefers-reduced-motion:reduce){.fallback svg{animation:none!important}}
 .agent-avatar.thinking { box-shadow: 0 0 0 2px #c6d9e9; }
 .agent-avatar.typing { box-shadow: 0 0 0 2px #b8d8c8; }
 .agent-avatar.speaking { box-shadow: 0 0 0 2px #e8d2ac; }
