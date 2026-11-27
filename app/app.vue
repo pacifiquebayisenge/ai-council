@@ -335,7 +335,7 @@ function addressee(entry: ChatMessage) {
           class="participant"
           :data-state="activity[person.id] || 'waiting'"
         >
-          <span class="avatar" :data-member="person.id" aria-hidden="true">{{ person.name[0] }}</span>
+          <AgentAvatar :member="person.id" :state="activity[person.id] || (running ? 'waiting' : 'done')" />
           <div>
             <strong>{{ person.name }}</strong>
             <span class="participant-role">{{ person.role }}<template v-if="'model' in person"> · {{ person.model }}</template></span>
@@ -356,7 +356,7 @@ function addressee(entry: ChatMessage) {
 
       <div v-else class="thread">
         <article v-for="entry in transcript" :key="entry.id" class="message" :class="entry.kind">
-          <span class="avatar" :data-member="entry.councillorId" aria-hidden="true">{{ entry.name[0] }}</span>
+          <AgentAvatar :member="entry.councillorId" size="small" state="done" />
           <div class="content">
             <header class="byline">
               <strong>{{ entry.name }}</strong>
@@ -514,9 +514,7 @@ button:disabled { cursor: default; opacity: .45; }
   border: 1px solid #e7e4dd;
   border-radius: 11px;
   background: #fffefa;
-  transition: background 160ms, border-color 160ms;
-}
-.participant strong, .participant-role, .participant-state { display: block; }
+  transition: background 160ms, border-color 160ms;\n  min-height: 78px;\n}\n.participant strong, .participant-role, .participant-state { display: block; }
 .participant strong { font-size: .85rem; }
 .participant-role, .participant-state { color: #5e5d55; font-size: .72rem; }
 .participant-state { margin-top: 3px; }
