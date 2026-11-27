@@ -547,6 +547,7 @@ ${previousContext}
 
 Nieuwe vraag:
 ${question}
+Most recent user statements (override previous agent examples): ${userStatements.slice(-8).join(" | ")}
 
 User contributions during this round:
 ${JSON.stringify(chatMessages.filter((entry) => entry.kind === "user").map((entry) => entry.message))}
@@ -1027,7 +1028,7 @@ ${JSON.stringify(
   })),
 )}
 
-Use authoritative user facts over all conflicting debate claims. Reject recommendations violating confirmed constraints.\nFormulate one practical final recommendation.
+Use authoritative user facts AND the latest user statement over all conflicting debate claims. Agent hypotheticals are not user facts. Latest user statements: ${userStatements.slice(-10).join(" | ")}. Reject recommendations violating confirmed constraints.\nFormulate one practical final recommendation.
 
 Regels:
 - Use initial positions, debate replies and relevant contributions from the user.
