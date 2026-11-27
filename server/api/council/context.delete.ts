@@ -12,6 +12,7 @@ export default defineEventHandler(async (event) => {
   const context = loadUserContext(sessionId);
   if (!context) return { context: null };
   context.facts = context.facts.filter((fact) => fact.key !== key);
+  context.deletedKeys = [...new Set([...(context.deletedKeys ?? []), key])];
   storeUserContext(sessionId, context);
   return { context };
 });
